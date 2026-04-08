@@ -150,11 +150,19 @@ def authenticate(page) -> None:
     storefront_host = STOREFRONT.split("//", 1)[1].split("/")[0]
     page.wait_for_url(f"**{storefront_host}**", timeout=30_000)
 
-    # Dismiss the CitrixEndpointAnalysis.app browser dialog and skip the check
+    # Dismiss the CitrixEndpointAnalysis native OS dialog (if visible mode)
+    # The --disable-external-protocol-dialog flag handles this in most cases;
+    # the osascript call below is a fallback. Both are no-ops in headless mode.
     page.on("dialog", lambda d: d.dismiss())
+    time.sleep(1)  # brief pause for the native dialog to appear if it's going to
+    subprocess.run(
+        ["osascript", "-e", "tell application \"System Events\" to key code 53"],
+        check=False, capture_output=True,
+    )  # key code 53 = Escape
+
     try:
         page.get_by_text("Skip Check", exact=False).first.click(timeout=10_000)
-        log.info("Dismissed endpoint analysis check.")
+        log.info("Skipped endpoint analysis check.")
     except PlaywrightTimeoutError:
         log.info("No endpoint analysis check appeared — continuing.")
 
@@ -178,25 +186,55 @@ def download_ica(page, pending_downloads: list) -> bool:
         log.info("ICA saved to %s", ICA_FILE)
         return True
 
-    # No auto-download — click the desktop entry to trigger one
-    log.info("No auto-download. Clicking '%s' → Open...", DESKTOP_NAME)
-    try:
-        with page.expect_download(timeout=15_000) as dl_info:
-            page.get_by_text(DESKTOP_NAME, exact=False).first.click()
-            page.get_by_text("Open", exact=True).first.click()
-        dl_info.value.save_as(ICA_FILE)
-        log.info("ICA saved to %s", ICA_FILE)
-        return True
-    except PlaywrightTimeoutError:
-        log.error("ICA download timed out after clicking Open.")
-        return False
+    # No auto-download — open the desktop action panel and click Open.
+    # The Open button may be greyed out (hidden class) briefly after page load;
+    # reload and retry until it becomes active.
+    max_menu_attempts = 5
+    for menu_attempt in range(1, max_menu_attempts + 1):
+        log.info(
+            "Opening action panel for '%s' (attempt %d/%d)...",
+            DESKTOP_NAME, menu_attempt, max_menu_attempts,
+        )
+        page.get_by_text(DESKTOP_NAME, exact=False).first.click()
+
+        # Wait for the action panel to appear
+        try:
+            page.wait_for_selector(".appDetails-actions-header", timeout=5_000)
+        except PlaywrightTimeoutError:
+            log.warning("Action panel did not appear — refreshing...")
+            page.reload(wait_until="networkidle")
+            continue
+
+        # Check if Open is available (not hidden)
+        open_btn = page.locator(".appDetails-action-launch")
+        is_hidden = open_btn.evaluate("el => el.classList.contains('hidden')")
+        if is_hidden:
+            log.warning("'Open' is not available yet — refreshing and retrying...")
+            page.reload(wait_until="networkidle")
+            time.sleep(3)
+            continue
+
+        # Click Open and capture the download
+        try:
+            with page.expect_download(timeout=15_000) as dl_info:
+                open_btn.click()
+            dl_info.value.save_as(ICA_FILE)
+            log.info("ICA saved to %s", ICA_FILE)
+            return True
+        except PlaywrightTimeoutError:
+            log.warning("Download timed out after clicking Open — retrying...")
+            page.reload(wait_until="networkidle")
+
+    log.error("'Open' remained unavailable after %d attempts.", max_menu_attempts)
+    return False
 
 
 def restart_desktop(page) -> None:
     """Click Desktop → Restart, confirm the dialog, wait, then refresh the page."""
     log.info("Clicking '%s' → Restart...", DESKTOP_NAME)
     page.get_by_text(DESKTOP_NAME, exact=False).first.click()
-    page.get_by_text("Restart", exact=True).first.click()
+    page.wait_for_selector(".appDetails-actions-header", timeout=5_000)
+    page.locator(".appDetails-action-restart").click()
 
     # Confirm the in-page restart dialog
     log.info("Confirming restart dialog...")
@@ -214,7 +252,10 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS)
+        browser = p.chromium.launch(
+            headless=HEADLESS,
+            args=["--disable-external-protocol-dialog"],
+        )
         context = browser.new_context(accept_downloads=True)
         page = context.new_page()
 
