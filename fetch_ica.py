@@ -18,6 +18,7 @@ Optional env vars:
     CITRIX_APP              Desktop display name (default: "My Windows 11 Desktop")
     CITRIX_PINGID_URL       URL pattern to match the PingID redirect (default: "**/pingid/**")
     CITRIX_YUBIKEY_TEXT     Button text on the PingID page for YubiKey (default: "YubiKey")
+    CITRIX_OTP              Static OTP / YubiKey value to inject (if set, skips the popup)
     OUTPUT_DIR              Where to save session.ica (default: ./output)
     MAX_RETRIES             Max restart attempts, 0 = infinite (default: 0)
     RESTART_WAIT            Seconds to wait after VM restart (default: 120)
@@ -48,6 +49,7 @@ PASSWORD      = os.environ["CITRIX_PASS"]
 DESKTOP_NAME  = os.environ.get("CITRIX_APP", "My Windows 11 Desktop")
 PINGID_URL    = os.environ.get("CITRIX_PINGID_URL", "**/pingid/**")
 YUBIKEY_TEXT  = os.environ.get("CITRIX_YUBIKEY_TEXT", "YubiKey")
+STATIC_OTP    = os.environ.get("CITRIX_OTP", "")
 OUTPUT_DIR    = Path(os.environ.get("OUTPUT_DIR", "./output"))
 MAX_RETRIES   = int(os.environ.get("MAX_RETRIES", "0"))
 RESTART_WAIT  = int(os.environ.get("RESTART_WAIT", "120"))
@@ -125,30 +127,43 @@ def authenticate(page) -> None:
     log.info("Clicking Sign On to proceed to OTP page...")
     page.locator("#device-submit").click()
 
-    # OTP entry page: focus the input and prompt user to tap
+    # OTP entry page: capture OTP via a native macOS dialog so it works in
+    # both headless and visible modes (headless has no browser focus for the key)
     log.info("Waiting for OTP input field...")
     otp_field = page.wait_for_selector(
         "input[type='text']:visible, input[type='tel']:visible, input[type='password']:visible",
         timeout=15_000,
     )
-    otp_field.click()
 
-    notify("Tap your YubiKey now")
-    log.info("Waiting for YubiKey OTP (tap your key)...")
+    if STATIC_OTP:
+        log.info("Using OTP from CITRIX_OTP env var.")
+        otp = STATIC_OTP
+    else:
+        # Open a native dialog that receives keyboard focus — tap YubiKey into it
+        log.info("Opening native OTP capture dialog — tap your YubiKey when prompted...")
+        otp_result = subprocess.run(
+            [
+                "osascript", "-e",
+                'set otp to text returned of (display dialog "Tap your YubiKey now" '
+                'default answer "" with title "Citrix Login" giving up after 60)\n'
+                'return otp',
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        otp = otp_result.stdout.strip()
+        if not otp:
+            raise RuntimeError("YubiKey OTP not received (timed out or cancelled)")
 
-    # Yubico OTP is ~44 characters; browser auto-redirects once filled
-    page.wait_for_function(
-        """() => {
-            const fields = document.querySelectorAll('input[type="text"], input[type="tel"], input[type="password"]');
-            return [...fields].some(el => el.value.length > 10);
-        }""",
-        timeout=60_000,
-    )
+    log.info("OTP captured (%d chars) — injecting into page...", len(otp))
+    # press_sequentially fires keydown/keyup events per character, matching how
+    # PingID detects the OTP (same as if the key typed directly into the field)
+    otp_field.type(otp)
+    otp_field.press("Enter")
 
     # ── Wait for redirect back to Citrix StoreFront ────────────────────────────
     log.info("Waiting for StoreFront redirect after auth...")
     storefront_host = STOREFRONT.split("//", 1)[1].split("/")[0]
-    page.wait_for_url(f"**{storefront_host}**", timeout=30_000)
+    page.wait_for_url(f"**{storefront_host}**", timeout=60_000)
 
     # Dismiss the CitrixEndpointAnalysis native OS dialog (if visible mode)
     # The --disable-external-protocol-dialog flag handles this in most cases;
