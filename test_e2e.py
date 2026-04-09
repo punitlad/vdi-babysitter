@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """
-End-to-end test: runs fetch_ica.py against the live Citrix environment
-and validates that session.ica is downloaded successfully.
+End-to-end test: runs `vdi-babysitter citrix connect --download-only`
+against the live Citrix environment and validates that session.ica downloads.
 
 Reads credentials from .envrc in the project root.
-Runs headless with CITRIX_DOWNLOAD_ONLY=true (skips Workspace launch).
-
-Usage:
-    python test_e2e.py
 """
 
 import os
@@ -18,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).parent
+CLI = ROOT / ".venv" / "bin" / "vdi-babysitter"
 
 
 def load_envrc(path: Path) -> dict:
@@ -40,26 +37,33 @@ def main():
         print("ERROR: .envrc not found", file=sys.stderr)
         sys.exit(1)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        env = {
-            **os.environ,
-            **load_envrc(envrc),
-            "OUTPUT_DIR": tmp,
-            "CITRIX_HEADLESS": "true",
-            "CITRIX_DOWNLOAD_ONLY": "true",
-        }
+    envrc_vars = load_envrc(envrc)
 
-        print("=== Running fetch_ica.py ===")
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "fetch_ica.py")],
-            env=env,
-        )
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {**os.environ, **envrc_vars}
+
+        cmd = [
+            str(CLI),
+            "citrix", "connect",
+            "--download-only",
+            "--output-dir", tmp,
+            "--verbose",
+        ]
+
+        # Pass OTP explicitly if set in .envrc (CITRIX_OTP → --otp flag,
+        # since OTP is no longer read from env vars by the CLI).
+        otp = envrc_vars.get("CITRIX_OTP")
+        if otp:
+            cmd += ["--otp", otp]
+
+        print(f"=== Running: {' '.join(cmd)} ===")
+        result = subprocess.run(cmd, env=env)
 
         print()
         ica = Path(tmp) / "session.ica"
 
         if result.returncode != 0:
-            print(f"FAIL: fetch_ica.py exited with code {result.returncode}")
+            print(f"FAIL: vdi-babysitter exited with code {result.returncode}")
             sys.exit(1)
 
         if not ica.exists():
