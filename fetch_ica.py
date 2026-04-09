@@ -24,6 +24,7 @@ Optional env vars:
     RESTART_WAIT            Seconds to wait after VM restart (default: 120)
     CITRIX_RESTART_FIRST    Set to "true" to restart desktop before first attempt
     CITRIX_HEADLESS         Set to "false" to show the browser window (default: true)
+    CITRIX_DOWNLOAD_ONLY    Set to "true" to exit after saving the ICA (skips Workspace launch)
 """
 
 import os
@@ -55,6 +56,7 @@ MAX_RETRIES   = int(os.environ.get("MAX_RETRIES", "0"))
 RESTART_WAIT  = int(os.environ.get("RESTART_WAIT", "120"))
 RESTART_FIRST = os.environ.get("CITRIX_RESTART_FIRST", "false").lower() == "true"
 HEADLESS      = os.environ.get("CITRIX_HEADLESS", "true").lower() != "false"
+DOWNLOAD_ONLY = os.environ.get("CITRIX_DOWNLOAD_ONLY", "false").lower() == "true"
 
 ICA_FILE = OUTPUT_DIR / "session.ica"
 
@@ -159,6 +161,15 @@ def authenticate(page) -> None:
     # PingID detects the OTP (same as if the key typed directly into the field)
     otp_field.type(otp)
     otp_field.press("Enter")
+
+    # ── Check for OTP rejection before waiting for redirect ───────────────────
+    # PingID shows <div class="error-message show">Invalid passcode</div>
+    # when the YubiKey OTP is rejected; detect it early rather than timing out.
+    time.sleep(2)
+    error_el = page.locator(".error-message.show")
+    if error_el.count() > 0:
+        msg = error_el.first.inner_text().strip()
+        raise RuntimeError(f"YubiKey OTP rejected by PingID: {msg!r}")
 
     # ── Wait for redirect back to Citrix StoreFront ────────────────────────────
     log.info("Waiting for StoreFront redirect after auth...")
@@ -305,6 +316,10 @@ def main() -> None:
                     log.warning("Could not download ICA — restarting desktop and retrying...")
                     restart_desktop(page)
                     continue
+
+                if DOWNLOAD_ONLY:
+                    log.info("CITRIX_DOWNLOAD_ONLY=true — ICA saved, skipping Workspace launch.")
+                    sys.exit(0)
 
                 log.info("Opening ICA with Citrix Workspace...")
                 subprocess.run(["open", str(ICA_FILE)], check=True)
