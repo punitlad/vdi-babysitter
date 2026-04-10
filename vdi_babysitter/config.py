@@ -82,6 +82,25 @@ def load_profile(profile: str) -> dict[str, Any]:
     return profiles.get(profile, {})
 
 
+def write_profile(profile: str, data: dict[str, Any]) -> Path:
+    """Write or update a profile in the global config file."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    raw: dict = {}
+    if GLOBAL_CONFIG.exists():
+        raw = yaml.safe_load(GLOBAL_CONFIG.read_text()) or {}
+    raw.setdefault("profiles", {})[profile] = data
+    GLOBAL_CONFIG.write_text(yaml.dump(raw, default_flow_style=False, sort_keys=True))
+    return GLOBAL_CONFIG
+
+
+def list_profiles() -> list[str]:
+    """Return all profile names from the global config file."""
+    if not GLOBAL_CONFIG.exists():
+        return []
+    raw = yaml.safe_load(GLOBAL_CONFIG.read_text()) or {}
+    return list(raw.get("profiles", {}).keys())
+
+
 def resolve(flag_value: Optional[Any], config_value: Optional[Any], default: Any = None) -> Any:
     """Return the first non-None value: flag → config → default."""
     if flag_value is not None:

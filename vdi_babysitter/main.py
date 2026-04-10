@@ -4,6 +4,7 @@ import sys
 import typer
 
 from vdi_babysitter.config import get_active_profile, set_active_profile
+from vdi_babysitter.configure_commands import configure_app
 from vdi_babysitter.providers.citrix import commands as citrix_commands
 
 app = typer.Typer(
@@ -18,6 +19,8 @@ citrix_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(citrix_app, name="citrix")
+
+app.add_typer(configure_app, name="configure")
 
 citrix_app.command("connect")(citrix_commands.connect)
 citrix_app.command("disconnect")(citrix_commands.disconnect)
