@@ -2,6 +2,8 @@
 
 Because your VDI can't be trusted to just work on its own.
 
+See [ROADMAP.md](./ROADMAP.md) for what's implemented, what's planned, and what's coming in future versions.
+
 This tool automates the painful morning ritual of logging into a Citrix VDI — navigating the web portal, surviving SSO and PingID MFA, downloading the ICA file, and dealing with the 50–75% chance that the session fails to connect and needs a full desktop restart before it'll cooperate.
 
 ---
@@ -120,6 +122,8 @@ A project-local `.vdi-babysitter.yaml` in the current directory takes precedence
 
 ### Profiles
 
+> **Note:** Profile switching via `vdi-babysitter use <profile>` is not yet fully implemented. The `configure` commands and named profiles in the config file work, but persisting the active profile across invocations is planned for v2. Use `--profile <name>` or `VDI_BABYSITTER_PROFILE` to select a profile explicitly for now.
+
 ```bash
 # Create or edit a profile interactively
 vdi-babysitter configure --profile work
@@ -132,9 +136,6 @@ vdi-babysitter configure show --profile work
 
 # List all profiles
 vdi-babysitter configure list-profiles
-
-# Switch active profile
-vdi-babysitter use work
 ```
 
 Once a profile is configured, you only need to provide the OTP:
@@ -163,8 +164,7 @@ vdi-babysitter citrix connect --otp <yubikey-value>
 | `--no-headless` | — | — | Show the browser window |
 | `--download-only` | `CITRIX_DOWNLOAD_ONLY` | `false` | Exit after saving ICA, skip Workspace launch |
 | `--output` | — | `text` | Output format: `text`, `json` |
-| `--verbose` | — | — | Show INFO-level progress logs |
-| `--debug` | — | — | Show DEBUG-level logs (implies full stack traces on error) |
+| `--log-level` | — | `info` | Log verbosity: `debug`, `info`, `quiet`. Defaults to `quiet` when `--output json`. Full stack traces on error with `debug`. |
 | `--profile` | `VDI_BABYSITTER_PROFILE` | `default` | Config profile to use |
 
 ---
