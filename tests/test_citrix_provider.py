@@ -145,6 +145,110 @@ def test_download_ica_returns_false_after_all_attempts(tmp_path):
     assert result is False
 
 
+def _get_response_handler(page):
+    """Extract the handler registered via page.on('response', handler)."""
+    calls = [c for c in page.on.call_args_list if c[0][0] == "response"]
+    assert calls, "No 'response' listener registered"
+    return calls[0][0][1]
+
+
+def test_download_ica_registers_response_listener(tmp_path):
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    provider = make_provider(output_dir=tmp_path)
+    page = MagicMock()
+    provider._pending_downloads = []
+    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
+
+    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
+        provider._download_ica(page)
+
+    assert _get_response_handler(page) is not None
+
+
+def test_download_ica_response_listener_logs_get_launch_status(tmp_path):
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    provider = make_provider(output_dir=tmp_path)
+    page = MagicMock()
+    provider._pending_downloads = []
+    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
+
+    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
+        provider._download_ica(page)
+
+    handler = _get_response_handler(page)
+
+    mock_response = MagicMock()
+    mock_response.url = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/GetLaunchStatus/abc123"
+    mock_response.json.return_value = {"status": "retry", "fileFetchUrl": None, "pollTimeout": 5}
+
+    with patch("vdi_babysitter.providers.citrix.provider.log") as mock_log:
+        handler(mock_response)
+        mock_log.debug.assert_called_once()
+        assert "retry" in str(mock_log.debug.call_args)
+
+
+def test_download_ica_response_listener_logs_failure_with_error_id(tmp_path):
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    provider = make_provider(output_dir=tmp_path)
+    page = MagicMock()
+    provider._pending_downloads = []
+    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
+
+    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
+        provider._download_ica(page)
+
+    handler = _get_response_handler(page)
+
+    mock_response = MagicMock()
+    mock_response.url = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/GetLaunchStatus/abc123"
+    mock_response.json.return_value = {"status": "failure", "errorId": "UnavailableDesktop", "fileFetchUrl": None}
+
+    with patch("vdi_babysitter.providers.citrix.provider.log") as mock_log:
+        handler(mock_response)
+        mock_log.debug.assert_called_once()
+        assert "UnavailableDesktop" in str(mock_log.debug.call_args)
+
+
+def test_download_ica_response_listener_ignores_other_urls(tmp_path):
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    provider = make_provider(output_dir=tmp_path)
+    page = MagicMock()
+    provider._pending_downloads = []
+    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
+
+    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
+        provider._download_ica(page)
+
+    handler = _get_response_handler(page)
+
+    mock_response = MagicMock()
+    mock_response.url = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/LaunchIca/abc.ica"
+
+    with patch("vdi_babysitter.providers.citrix.provider.log") as mock_log:
+        handler(mock_response)
+        mock_log.debug.assert_not_called()
+
+
+def test_download_ica_response_listener_swallows_json_error(tmp_path):
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    provider = make_provider(output_dir=tmp_path)
+    page = MagicMock()
+    provider._pending_downloads = []
+    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
+
+    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
+        provider._download_ica(page)
+
+    handler = _get_response_handler(page)
+
+    mock_response = MagicMock()
+    mock_response.url = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/GetLaunchStatus/abc123"
+    mock_response.json.side_effect = Exception("parse error")
+
+    # Should not raise
+    handler(mock_response)
+
+
 # ── _authenticate ──────────────────────────────────────────────────────────────
 
 def test_authenticate_otp_rejection_raises():

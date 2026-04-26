@@ -210,6 +210,20 @@ class CitrixProvider:
         log.info("Authentication complete.")
 
     def _download_ica(self, page) -> bool:
+        def _on_response(response):
+            if "GetLaunchStatus" in response.url:
+                try:
+                    body = response.json()
+                    log.debug(
+                        "GetLaunchStatus: status=%s errorId=%s",
+                        body.get("status"),
+                        body.get("errorId"),
+                    )
+                except Exception:
+                    pass
+
+        page.on("response", _on_response)
+
         page.wait_for_load_state("networkidle")
         time.sleep(5)
 
