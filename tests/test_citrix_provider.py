@@ -85,17 +85,34 @@ def test_session_connected_no_citrix_process():
 
 # ── _restart_desktop ───────────────────────────────────────────────────────────
 
-def test_restart_desktop_clicks_and_waits():
-    provider = make_provider(restart_wait=0)
+def test_restart_desktop_waits_for_poweroff_response():
+    provider = make_provider()
     page = MagicMock()
 
-    with patch("vdi_babysitter.providers.citrix.provider.time.sleep") as mock_sleep:
-        provider._restart_desktop(page)
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=MagicMock())
+    cm.__exit__ = MagicMock(return_value=False)
+    page.expect_response.return_value = cm
+
+    provider._restart_desktop(page)
 
     page.get_by_text.assert_called()
     page.locator(".appDetails-action-restart").click.assert_called_once()
     page.get_by_role("button", name="Restart").click.assert_called_once()
-    mock_sleep.assert_called()
+    page.expect_response.assert_called_once()
+
+def test_restart_desktop_raises_on_poweroff_timeout():
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    provider = make_provider()
+    page = MagicMock()
+
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(side_effect=PlaywrightTimeoutError("timeout"))
+    cm.__exit__ = MagicMock(return_value=False)
+    page.expect_response.return_value = cm
+
+    with pytest.raises(RuntimeError, match="PowerOff"):
+        provider._restart_desktop(page)
 
 
 # ── _log_launch_status ─────────────────────────────────────────────────────────
@@ -295,7 +312,7 @@ def test_download_ica_scenario3_failure_retry_failure_then_restart_and_success(t
 
     fake_dl = MagicMock()
 
-    def inject_download_after_restart(p):
+    def inject_download_after_restart(p, **kwargs):
         provider._pending_downloads.append(fake_dl)
 
     with patch.object(provider, "_restart_desktop", side_effect=inject_download_after_restart), \

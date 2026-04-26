@@ -57,7 +57,7 @@ class CitrixProvider:
 
                 if self.config.restart_first:
                     log.info("restart_first — restarting desktop before first attempt...")
-                    self._restart_desktop(page)
+                    self._restart_desktop(page, deadline=deadline)
 
                 attempt = 0
                 while True:
@@ -82,7 +82,7 @@ class CitrixProvider:
 
                     if not self._download_ica(page, deadline=deadline):
                         log.warning("Could not download ICA — restarting desktop and retrying...")
-                        self._restart_desktop(page)
+                        self._restart_desktop(page, deadline=deadline)
                         continue
 
                     if self.config.download_only:
@@ -97,7 +97,7 @@ class CitrixProvider:
                         return
 
                     log.warning("Session failed to connect — restarting desktop...")
-                    self._restart_desktop(page)
+                    self._restart_desktop(page, deadline=deadline)
 
             finally:
                 browser.close()
@@ -354,7 +354,7 @@ class CitrixProvider:
 
             log.warning("Second GetLaunchStatus failure — restarting desktop...")
             restarted = True
-            self._restart_desktop(page)
+            self._restart_desktop(page, deadline=deadline)
 
             if self._pending_downloads:
                 log.info("Auto-download detected after restart.")
@@ -362,20 +362,28 @@ class CitrixProvider:
                 log.info("ICA saved to %s", self._ica_file)
                 return True
 
-    def _restart_desktop(self, page) -> None:
+    def _restart_desktop(self, page, deadline=None) -> None:
+        remaining_ms = int((deadline - time.time()) * 1000) if deadline else 300_000
+
         log.info("Clicking '%s' → Restart...", self.config.desktop_name)
         page.get_by_text(self.config.desktop_name, exact=False).first.click()
         page.wait_for_selector(".appDetails-actions-header", timeout=5_000)
         page.locator(".appDetails-action-restart").click()
 
         log.info("Confirming restart dialog...")
-        page.get_by_role("button", name="Restart").click()
+        try:
+            with page.expect_response(
+                lambda r: "PowerOff" in r.url and r.json().get("status") == "success",
+                timeout=remaining_ms,
+            ):
+                page.get_by_role("button", name="Restart").click()
+        except PlaywrightTimeoutError:
+            raise RuntimeError(
+                "Timed out waiting for PowerOff to complete — "
+                "PowerOff failure handling not yet implemented."
+            )
 
-        log.info("Waiting %ds for desktop to restart...", self.config.restart_wait)
-        time.sleep(self.config.restart_wait)
-
-        log.info("Refreshing StoreFront page...")
-        page.reload(wait_until="networkidle")
+        log.info("PowerOff confirmed — GetLaunchStatus polling will resume automatically.")
 
     def _session_connected(self, timeout: int = 45) -> bool:
         log.info("Polling for established Citrix TCP connection (up to %ds)...", timeout)
