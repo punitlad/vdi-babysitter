@@ -85,7 +85,7 @@ def test_connect_debug_reraises():
          patch("vdi_babysitter.providers.citrix.commands.load_profile", return_value={}), \
          patch("vdi_babysitter.providers.citrix.commands.CitrixProvider") as MockProvider:
         MockProvider.return_value.connect.side_effect = RuntimeError("boom")
-        result = runner.invoke(app, ["citrix", "connect"] + BASE_FLAGS + ["--debug"])
+        result = runner.invoke(app, ["citrix", "connect"] + BASE_FLAGS + ["--log-level", "debug"])
     assert result.exception is not None
     assert "boom" in str(result.exception)
 
