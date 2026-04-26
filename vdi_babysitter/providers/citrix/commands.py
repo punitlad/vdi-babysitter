@@ -44,13 +44,17 @@ def connect(
     timeout: Optional[int] = typer.Option(None, "--timeout", help="Max wall-clock seconds for the entire connect operation."),
     profile: Optional[str] = typer.Option(None, "--profile", envvar="VDI_BABYSITTER_PROFILE", help="Config profile to use."),
     output: str = typer.Option("text", "--output", help="Output format: text, json."),
-    log_level: str = typer.Option("info", "--log-level", help="Log verbosity: debug, info, quiet."),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="Log verbosity: debug, info, quiet. Defaults to quiet when --output json, otherwise info."),
 ) -> None:
     """Connect to a Citrix VDI session."""
-    if log_level not in ("debug", "info", "quiet"):
+    resolved_log_level = log_level or ("quiet" if output == "json" else "info")
+    if resolved_log_level not in ("debug", "info", "quiet"):
         print("Error: --log-level must be one of: debug, info, quiet.", file=sys.stderr)
         raise typer.Exit(1)
-    _setup_logging(log_level)
+    if output not in ("text", "json"):
+        print("Error: --output must be one of: text, json.", file=sys.stderr)
+        raise typer.Exit(1)
+    _setup_logging(resolved_log_level)
 
     if otp and otp_cmd:
         print("Error: --otp and --otp-cmd are mutually exclusive.", file=sys.stderr)
@@ -98,7 +102,7 @@ def connect(
     try:
         provider.connect()
     except Exception as e:
-        if log_level == "debug":
+        if resolved_log_level == "debug":
             raise
         print(f"Error: {e}", file=sys.stderr)
         raise typer.Exit(1)
@@ -110,10 +114,14 @@ def connect(
 def disconnect(
     profile: Optional[str] = typer.Option(None, "--profile", envvar="VDI_BABYSITTER_PROFILE", help="Config profile to use."),
     output: str = typer.Option("text", "--output", help="Output format: text, json."),
-    log_level: str = typer.Option("info", "--log-level", help="Log verbosity: debug, info, quiet."),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="Log verbosity: debug, info, quiet."),
 ) -> None:
     """Disconnect the active Citrix session."""
-    _setup_logging(log_level)
+    resolved_log_level = log_level or ("quiet" if output == "json" else "info")
+    if output not in ("text", "json"):
+        print("Error: --output must be one of: text, json.", file=sys.stderr)
+        raise typer.Exit(1)
+    _setup_logging(resolved_log_level)
 
     result = subprocess.run(["pkill", "-x", "Citrix Workspace"], capture_output=True)
     if result.returncode != 0:
@@ -130,10 +138,14 @@ def status(
     interval: int = typer.Option(30, "--interval", help="Poll interval in seconds (--watch only)."),
     profile: Optional[str] = typer.Option(None, "--profile", envvar="VDI_BABYSITTER_PROFILE", help="Config profile to use."),
     output: str = typer.Option("text", "--output", help="Output format: text, json."),
-    log_level: str = typer.Option("info", "--log-level", help="Log verbosity: debug, info, quiet."),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="Log verbosity: debug, info, quiet."),
 ) -> None:
     """Check whether a Citrix session is connected (TCP)."""
-    _setup_logging(log_level)
+    resolved_log_level = log_level or ("quiet" if output == "json" else "info")
+    if output not in ("text", "json"):
+        print("Error: --output must be one of: text, json.", file=sys.stderr)
+        raise typer.Exit(1)
+    _setup_logging(resolved_log_level)
 
     def _connected() -> bool:
         result = subprocess.run(

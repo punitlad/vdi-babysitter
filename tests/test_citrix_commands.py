@@ -80,6 +80,38 @@ def test_connect_provider_error_shown_to_user():
     assert result.exit_code == 1
     assert "YubiKey OTP rejected" in result.output
 
+def test_connect_invalid_output_flag():
+    with patch("vdi_babysitter.providers.citrix.commands.get_active_profile", return_value="default"), \
+         patch("vdi_babysitter.providers.citrix.commands.load_profile", return_value={}):
+        result = runner.invoke(app, ["citrix", "connect"] + BASE_FLAGS + ["--output", "table"])
+    assert result.exit_code == 1
+    assert "--output" in result.output
+
+def test_connect_invalid_log_level_flag():
+    with patch("vdi_babysitter.providers.citrix.commands.get_active_profile", return_value="default"), \
+         patch("vdi_babysitter.providers.citrix.commands.load_profile", return_value={}):
+        result = runner.invoke(app, ["citrix", "connect"] + BASE_FLAGS + ["--log-level", "verbose"])
+    assert result.exit_code == 1
+    assert "--log-level" in result.output
+
+def test_connect_output_json_defaults_to_quiet_logging():
+    with patch("vdi_babysitter.providers.citrix.commands.get_active_profile", return_value="default"), \
+         patch("vdi_babysitter.providers.citrix.commands.load_profile", return_value={}), \
+         patch("vdi_babysitter.providers.citrix.commands.CitrixProvider") as MockProvider, \
+         patch("vdi_babysitter.providers.citrix.commands._setup_logging") as mock_setup:
+        MockProvider.return_value.connect.return_value = None
+        runner.invoke(app, ["citrix", "connect"] + BASE_FLAGS + ["--output", "json"])
+    mock_setup.assert_called_once_with("quiet")
+
+def test_connect_output_json_with_explicit_log_level_debug():
+    with patch("vdi_babysitter.providers.citrix.commands.get_active_profile", return_value="default"), \
+         patch("vdi_babysitter.providers.citrix.commands.load_profile", return_value={}), \
+         patch("vdi_babysitter.providers.citrix.commands.CitrixProvider") as MockProvider, \
+         patch("vdi_babysitter.providers.citrix.commands._setup_logging") as mock_setup:
+        MockProvider.return_value.connect.return_value = None
+        runner.invoke(app, ["citrix", "connect"] + BASE_FLAGS + ["--output", "json", "--log-level", "debug"])
+    mock_setup.assert_called_once_with("debug")
+
 def test_connect_debug_reraises():
     with patch("vdi_babysitter.providers.citrix.commands.get_active_profile", return_value="default"), \
          patch("vdi_babysitter.providers.citrix.commands.load_profile", return_value={}), \
