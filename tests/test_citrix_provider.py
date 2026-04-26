@@ -98,22 +98,140 @@ def test_restart_desktop_clicks_and_waits():
     mock_sleep.assert_called()
 
 
+# ── _log_launch_status ─────────────────────────────────────────────────────────
+
+def make_response(url, json_body=None, json_error=None):
+    r = MagicMock()
+    r.url = url
+    if json_error:
+        r.json.side_effect = json_error
+    else:
+        r.json.return_value = json_body or {}
+    return r
+
+LAUNCH_STATUS_URL = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/GetLaunchStatus/abc"
+OTHER_URL = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/LaunchIca/abc.ica"
+
+def test_log_launch_status_logs_status_and_error_id():
+    provider = make_provider()
+    response = make_response(LAUNCH_STATUS_URL, {"status": "retry", "errorId": None})
+    with patch("vdi_babysitter.providers.citrix.provider.log") as mock_log:
+        provider._log_launch_status(response)
+        mock_log.debug.assert_called_once()
+        assert "retry" in str(mock_log.debug.call_args)
+
+def test_log_launch_status_logs_failure_with_error_id():
+    provider = make_provider()
+    response = make_response(LAUNCH_STATUS_URL, {"status": "failure", "errorId": "UnavailableDesktop"})
+    with patch("vdi_babysitter.providers.citrix.provider.log") as mock_log:
+        provider._log_launch_status(response)
+        mock_log.debug.assert_called_once()
+        assert "UnavailableDesktop" in str(mock_log.debug.call_args)
+
+def test_log_launch_status_ignores_other_urls():
+    provider = make_provider()
+    response = make_response(OTHER_URL)
+    with patch("vdi_babysitter.providers.citrix.provider.log") as mock_log:
+        provider._log_launch_status(response)
+        mock_log.debug.assert_not_called()
+
+def test_log_launch_status_swallows_json_error():
+    provider = make_provider()
+    response = make_response(LAUNCH_STATUS_URL, json_error=Exception("bad json"))
+    provider._log_launch_status(response)  # must not raise
+
+
+# ── _is_terminal_launch_status ─────────────────────────────────────────────────
+
+def test_is_terminal_returns_true_for_success():
+    provider = make_provider()
+    assert provider._is_terminal_launch_status(
+        make_response(LAUNCH_STATUS_URL, {"status": "success"})
+    ) is True
+
+def test_is_terminal_returns_true_for_failure():
+    provider = make_provider()
+    assert provider._is_terminal_launch_status(
+        make_response(LAUNCH_STATUS_URL, {"status": "failure", "errorId": "UnavailableDesktop"})
+    ) is True
+
+def test_is_terminal_returns_false_for_retry():
+    provider = make_provider()
+    assert provider._is_terminal_launch_status(
+        make_response(LAUNCH_STATUS_URL, {"status": "retry"})
+    ) is False
+
+def test_is_terminal_returns_false_for_non_launch_status_url():
+    provider = make_provider()
+    assert provider._is_terminal_launch_status(make_response(OTHER_URL, {"status": "success"})) is False
+
+def test_is_terminal_returns_false_on_json_error():
+    provider = make_provider()
+    assert provider._is_terminal_launch_status(
+        make_response(LAUNCH_STATUS_URL, json_error=Exception("bad"))
+    ) is False
+
+
 # ── _download_ica ──────────────────────────────────────────────────────────────
 
-def test_download_ica_uses_pending_download(tmp_path):
+def _make_terminal_response(status, error_id=None):
+    body = {"status": status}
+    if error_id:
+        body["errorId"] = error_id
+    return make_response(LAUNCH_STATUS_URL, body)
+
+
+def _make_expect_response_cm(response=None, timeout_error=False):
+    """Build a mock context manager for page.expect_response."""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    cm = MagicMock()
+    resp_info = MagicMock()
+    if timeout_error:
+        cm.__enter__ = MagicMock(side_effect=PlaywrightTimeoutError("timeout"))
+    else:
+        resp_info.value = response
+        cm.__enter__ = MagicMock(return_value=resp_info)
+    cm.__exit__ = MagicMock(return_value=False)
+    return cm
+
+
+def test_download_ica_scenario1_auto_download_on_entry(tmp_path):
+    """Scenario 1: ICA already in _pending_downloads when _download_ica is called."""
     provider = make_provider(output_dir=tmp_path)
     page = MagicMock()
+    fake_dl = MagicMock()
+    provider._pending_downloads = [fake_dl]
 
-    fake_download = MagicMock()
-    provider._pending_downloads = [fake_download]
+    result = provider._download_ica(page)
 
-    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
+    assert result is True
+    fake_dl.save_as.assert_called_once_with(tmp_path / "session.ica")
+    page.expect_response.assert_not_called()
+
+
+def test_download_ica_scenario2_greyed_out_then_success(tmp_path):
+    """Scenario 2: Open button greyed out, GetLaunchStatus → success, download arrives."""
+    provider = make_provider(output_dir=tmp_path)
+    page = MagicMock()
+    provider._pending_downloads = []
+
+    open_btn = MagicMock()
+    open_btn.evaluate.return_value = True  # hidden
+    page.locator.return_value = open_btn
+
+    terminal = _make_terminal_response("success")
+    page.expect_response.return_value = _make_expect_response_cm(terminal)
+
+    with patch.object(provider, "_wait_for_download", return_value=True) as mock_wait:
         result = provider._download_ica(page)
 
     assert result is True
-    fake_download.save_as.assert_called_once_with(tmp_path / "session.ica")
+    open_btn.click.assert_not_called()
+    mock_wait.assert_called_once()
 
-def test_download_ica_clicks_open_button(tmp_path):
+
+def test_download_ica_scenario2_open_available_then_success(tmp_path):
+    """Scenario 2: Open button clickable, click it, GetLaunchStatus → success."""
     provider = make_provider(output_dir=tmp_path)
     page = MagicMock()
     provider._pending_downloads = []
@@ -122,131 +240,202 @@ def test_download_ica_clicks_open_button(tmp_path):
     open_btn.evaluate.return_value = False  # not hidden
     page.locator.return_value = open_btn
 
-    fake_download = MagicMock()
-    page.expect_download.return_value.__enter__ = MagicMock(return_value=MagicMock(value=fake_download))
-    page.expect_download.return_value.__exit__ = MagicMock(return_value=False)
+    terminal = _make_terminal_response("success")
+    page.expect_response.return_value = _make_expect_response_cm(terminal)
 
-    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
+    with patch.object(provider, "_wait_for_download", return_value=True):
         result = provider._download_ica(page)
 
     assert result is True
+    open_btn.click.assert_called_once()
 
-def test_download_ica_returns_false_after_all_attempts(tmp_path):
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+def test_download_ica_scenario3_failure_then_retry_success(tmp_path):
+    """Scenario 3: first GetLaunchStatus failure, Open reactivates, retry → success."""
     provider = make_provider(output_dir=tmp_path)
     page = MagicMock()
     provider._pending_downloads = []
 
-    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
+    open_btn = MagicMock()
+    open_btn.evaluate.return_value = False
+    page.locator.return_value = open_btn
 
-    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
+    failure = _make_terminal_response("failure", "UnavailableDesktop")
+    success = _make_terminal_response("success")
+    page.expect_response.side_effect = [
+        _make_expect_response_cm(failure),
+        _make_expect_response_cm(success),
+    ]
+
+    with patch.object(provider, "_wait_for_download", return_value=True):
+        result = provider._download_ica(page)
+
+    assert result is True
+    assert page.expect_response.call_count == 2
+
+
+def test_download_ica_scenario3_failure_retry_failure_then_restart_and_success(tmp_path):
+    """Scenario 3 → restart: two failures trigger restart; success on next loop."""
+    provider = make_provider(output_dir=tmp_path)
+    page = MagicMock()
+    provider._pending_downloads = []
+
+    open_btn = MagicMock()
+    open_btn.evaluate.return_value = False
+    page.locator.return_value = open_btn
+
+    failure = _make_terminal_response("failure", "UnavailableDesktop")
+    success = _make_terminal_response("success")
+    # First iteration: two failures → restart; second iteration: success
+    page.expect_response.side_effect = [
+        _make_expect_response_cm(failure),
+        _make_expect_response_cm(failure),
+        _make_expect_response_cm(success),
+    ]
+
+    fake_dl = MagicMock()
+
+    def inject_download_after_restart(p):
+        provider._pending_downloads.append(fake_dl)
+
+    with patch.object(provider, "_restart_desktop", side_effect=inject_download_after_restart), \
+         patch.object(provider, "_wait_for_download", return_value=True):
+        result = provider._download_ica(page)
+
+    assert result is True
+
+
+def test_download_ica_gives_up_after_second_restart_failure(tmp_path):
+    """After restart, if two more failures occur, return False."""
+    provider = make_provider(output_dir=tmp_path)
+    page = MagicMock()
+    provider._pending_downloads = []
+
+    open_btn = MagicMock()
+    open_btn.evaluate.return_value = False
+    page.locator.return_value = open_btn
+
+    failure = _make_terminal_response("failure", "UnavailableDesktop")
+    page.expect_response.side_effect = [
+        _make_expect_response_cm(failure),
+        _make_expect_response_cm(failure),
+        _make_expect_response_cm(failure),
+        _make_expect_response_cm(failure),
+    ]
+
+    with patch.object(provider, "_restart_desktop"):
         result = provider._download_ica(page)
 
     assert result is False
 
 
-def _get_response_handler(page):
-    """Extract the handler registered via page.on('response', handler)."""
-    calls = [c for c in page.on.call_args_list if c[0][0] == "response"]
-    assert calls, "No 'response' listener registered"
-    return calls[0][0][1]
+def test_download_ica_returns_false_on_expect_response_timeout(tmp_path):
+    """If expect_response times out on first wait, return False."""
+    provider = make_provider(output_dir=tmp_path)
+    page = MagicMock()
+    provider._pending_downloads = []
+
+    open_btn = MagicMock()
+    open_btn.evaluate.return_value = False
+    page.locator.return_value = open_btn
+
+    page.expect_response.return_value = _make_expect_response_cm(timeout_error=True)
+
+    result = provider._download_ica(page)
+
+    assert result is False
 
 
-def test_download_ica_registers_response_listener(tmp_path):
+def test_download_ica_returns_false_when_open_button_does_not_reactivate(tmp_path):
+    """If Open button doesn't reactivate after failure, return False."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     provider = make_provider(output_dir=tmp_path)
     page = MagicMock()
     provider._pending_downloads = []
-    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
 
-    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
-        provider._download_ica(page)
+    open_btn = MagicMock()
+    open_btn.evaluate.return_value = False
 
-    assert _get_response_handler(page) is not None
+    reactivate_btn = MagicMock()
+    reactivate_btn.wait_for.side_effect = PlaywrightTimeoutError("timeout")
+    page.locator.side_effect = [open_btn, reactivate_btn, open_btn]
+
+    failure = _make_terminal_response("failure", "UnavailableDesktop")
+    page.expect_response.return_value = _make_expect_response_cm(failure)
+
+    result = provider._download_ica(page)
+
+    assert result is False
 
 
-def test_download_ica_response_listener_logs_get_launch_status(tmp_path):
+def test_download_ica_auto_download_after_reload(tmp_path):
+    """If action panel times out and auto-download arrives after reload, return True."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     provider = make_provider(output_dir=tmp_path)
     page = MagicMock()
     provider._pending_downloads = []
+
+    fake_dl = MagicMock()
+
+    def inject_download(*args, **kwargs):
+        provider._pending_downloads.append(fake_dl)
+
     page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
+    page.reload.side_effect = inject_download
 
-    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
-        provider._download_ica(page)
+    result = provider._download_ica(page)
 
-    handler = _get_response_handler(page)
-
-    mock_response = MagicMock()
-    mock_response.url = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/GetLaunchStatus/abc123"
-    mock_response.json.return_value = {"status": "retry", "fileFetchUrl": None, "pollTimeout": 5}
-
-    with patch("vdi_babysitter.providers.citrix.provider.log") as mock_log:
-        handler(mock_response)
-        mock_log.debug.assert_called_once()
-        assert "retry" in str(mock_log.debug.call_args)
+    assert result is True
+    fake_dl.save_as.assert_called_once_with(tmp_path / "session.ica")
 
 
-def test_download_ica_response_listener_logs_failure_with_error_id(tmp_path):
+# ── _wait_for_download ─────────────────────────────────────────────────────────
+
+def test_wait_for_download_returns_true_when_download_already_pending(tmp_path):
+    provider = make_provider(output_dir=tmp_path)
+    fake_dl = MagicMock()
+    provider._pending_downloads = [fake_dl]
+    page = MagicMock()
+
+    result = provider._wait_for_download(page, deadline=None)
+
+    assert result is True
+    fake_dl.save_as.assert_called_once_with(tmp_path / "session.ica")
+    page.expect_download.assert_not_called()
+
+def test_wait_for_download_uses_expect_download_when_no_pending(tmp_path):
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     provider = make_provider(output_dir=tmp_path)
-    page = MagicMock()
     provider._pending_downloads = []
-    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
+    page = MagicMock()
 
-    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
-        provider._download_ica(page)
+    fake_dl = MagicMock()
+    cm = MagicMock()
+    dl_info = MagicMock()
+    dl_info.value = fake_dl
+    cm.__enter__ = MagicMock(return_value=dl_info)
+    cm.__exit__ = MagicMock(return_value=False)
+    page.expect_download.return_value = cm
 
-    handler = _get_response_handler(page)
+    result = provider._wait_for_download(page, deadline=None)
 
-    mock_response = MagicMock()
-    mock_response.url = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/GetLaunchStatus/abc123"
-    mock_response.json.return_value = {"status": "failure", "errorId": "UnavailableDesktop", "fileFetchUrl": None}
+    assert result is True
+    fake_dl.save_as.assert_called_once_with(tmp_path / "session.ica")
 
-    with patch("vdi_babysitter.providers.citrix.provider.log") as mock_log:
-        handler(mock_response)
-        mock_log.debug.assert_called_once()
-        assert "UnavailableDesktop" in str(mock_log.debug.call_args)
-
-
-def test_download_ica_response_listener_ignores_other_urls(tmp_path):
+def test_wait_for_download_returns_false_on_timeout(tmp_path):
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     provider = make_provider(output_dir=tmp_path)
-    page = MagicMock()
     provider._pending_downloads = []
-    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
-
-    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
-        provider._download_ica(page)
-
-    handler = _get_response_handler(page)
-
-    mock_response = MagicMock()
-    mock_response.url = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/LaunchIca/abc.ica"
-
-    with patch("vdi_babysitter.providers.citrix.provider.log") as mock_log:
-        handler(mock_response)
-        mock_log.debug.assert_not_called()
-
-
-def test_download_ica_response_listener_swallows_json_error(tmp_path):
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-    provider = make_provider(output_dir=tmp_path)
     page = MagicMock()
-    provider._pending_downloads = []
-    page.wait_for_selector.side_effect = PlaywrightTimeoutError("timeout")
 
-    with patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
-        provider._download_ica(page)
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(side_effect=PlaywrightTimeoutError("timeout"))
+    cm.__exit__ = MagicMock(return_value=False)
+    page.expect_download.return_value = cm
 
-    handler = _get_response_handler(page)
+    result = provider._wait_for_download(page, deadline=None)
 
-    mock_response = MagicMock()
-    mock_response.url = "https://citrix.example.com/Citrix/AppStoreWeb/Resources/GetLaunchStatus/abc123"
-    mock_response.json.side_effect = Exception("parse error")
-
-    # Should not raise
-    handler(mock_response)
+    assert result is False
 
 
 # ── _authenticate ──────────────────────────────────────────────────────────────

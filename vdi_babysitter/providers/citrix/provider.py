@@ -50,6 +50,7 @@ class CitrixProvider:
             context = browser.new_context(accept_downloads=True)
             page = context.new_page()
             page.on("download", lambda d: self._pending_downloads.append(d))
+            page.on("response", self._log_launch_status)
 
             try:
                 self._authenticate(page)
@@ -79,7 +80,7 @@ class CitrixProvider:
 
                     self._pending_downloads.clear()
 
-                    if not self._download_ica(page):
+                    if not self._download_ica(page, deadline=deadline):
                         log.warning("Could not download ICA — restarting desktop and retrying...")
                         self._restart_desktop(page)
                         continue
@@ -209,66 +210,157 @@ class CitrixProvider:
         page.wait_for_load_state("networkidle")
         log.info("Authentication complete.")
 
-    def _download_ica(self, page) -> bool:
-        def _on_response(response):
-            if "GetLaunchStatus" in response.url:
-                try:
-                    body = response.json()
-                    log.debug(
-                        "GetLaunchStatus: status=%s errorId=%s",
-                        body.get("status"),
-                        body.get("errorId"),
-                    )
-                except Exception:
-                    pass
+    def _log_launch_status(self, response) -> None:
+        """Background response listener — logs GetLaunchStatus polling state."""
+        if "GetLaunchStatus" in response.url:
+            try:
+                body = response.json()
+                log.debug(
+                    "GetLaunchStatus: status=%s errorId=%s",
+                    body.get("status"),
+                    body.get("errorId"),
+                )
+            except Exception:
+                pass
 
-        page.on("response", _on_response)
+    def _is_terminal_launch_status(self, response) -> bool:
+        """Predicate for wait_for_response — resolves only on success or failure."""
+        if "GetLaunchStatus" not in response.url:
+            return False
+        try:
+            return response.json().get("status") in ("success", "failure")
+        except Exception:
+            return False
+
+    def _wait_for_download(self, page, deadline) -> bool:
+        """Wait for the ICA download using Playwright's expect_download."""
+        log.info("Waiting for ICA download to arrive...")
+        # Check if download already landed in the listener before we got here.
+        if self._pending_downloads:
+            self._pending_downloads.pop(0).save_as(self._ica_file)
+            log.info("ICA saved to %s", self._ica_file)
+            return True
+        remaining_ms = int((deadline - time.time()) * 1000) if deadline else 300_000
+        try:
+            with page.expect_download(timeout=remaining_ms) as dl_info:
+                pass
+            dl_info.value.save_as(self._ica_file)
+            log.info("ICA saved to %s", self._ica_file)
+            return True
+        except PlaywrightTimeoutError:
+            log.error("Timed out waiting for ICA download after GetLaunchStatus success.")
+            return False
+
+    def _download_ica(self, page, deadline=None) -> bool:
+        remaining_ms = lambda: int((deadline - time.time()) * 1000) if deadline else 300_000
 
         page.wait_for_load_state("networkidle")
-        time.sleep(5)
 
+        # [1] Scenario 1: ICA already downloaded automatically on page load.
         if self._pending_downloads:
-            log.info("Auto-download detected.")
+            log.info("Auto-download detected before Open click.")
             self._pending_downloads.pop(0).save_as(self._ica_file)
             log.info("ICA saved to %s", self._ica_file)
             return True
 
-        max_attempts = 5
-        for attempt in range(1, max_attempts + 1):
-            log.info(
-                "Opening action panel for '%s' (attempt %d/%d)...",
-                self.config.desktop_name,
-                attempt,
-                max_attempts,
-            )
-            page.get_by_text(self.config.desktop_name, exact=False).first.click()
+        restarted = False
 
+        while True:
+            # Open the action panel for the desktop.
+            log.info("Opening action panel for '%s'...", self.config.desktop_name)
+            page.get_by_text(self.config.desktop_name, exact=False).first.click()
             try:
                 page.wait_for_selector(".appDetails-actions-header", timeout=5_000)
             except PlaywrightTimeoutError:
-                log.warning("Action panel did not appear — refreshing...")
+                log.warning("Action panel did not appear — reloading...")
                 page.reload(wait_until="networkidle")
+                if self._pending_downloads:
+                    log.info("Auto-download detected after reload.")
+                    self._pending_downloads.pop(0).save_as(self._ica_file)
+                    log.info("ICA saved to %s", self._ica_file)
+                    return True
                 continue
 
-            open_btn = page.locator(".appDetails-action-launch")
-            if open_btn.evaluate("el => el.classList.contains('hidden')"):
-                log.warning("'Open' not available yet — refreshing and retrying...")
-                page.reload(wait_until="networkidle")
-                time.sleep(3)
-                continue
-
+            # Register listener before checking button state to avoid missing
+            # responses that fire during the check or click.
             try:
-                with page.expect_download(timeout=15_000) as dl_info:
-                    open_btn.click()
-                dl_info.value.save_as(self._ica_file)
+                with page.expect_response(
+                    self._is_terminal_launch_status, timeout=remaining_ms()
+                ) as resp_info:
+                    open_btn = page.locator(".appDetails-action-launch")
+                    if not open_btn.evaluate("el => el.classList.contains('hidden')"):
+                        log.info("Open button available — clicking...")
+                        open_btn.click()
+                    else:
+                        log.info(
+                            "Open button greyed out — GetLaunchStatus polling in flight, "
+                            "waiting for terminal response..."
+                        )
+                terminal = resp_info.value
+            except PlaywrightTimeoutError:
+                log.error("Timed out waiting for terminal GetLaunchStatus response.")
+                return False
+
+            body = terminal.json()
+            status = body.get("status")
+            log.info(
+                "Terminal GetLaunchStatus: status=%s errorId=%s",
+                status,
+                body.get("errorId"),
+            )
+
+            if status == "success":
+                return self._wait_for_download(page, deadline)
+
+            # [5] Failure — Open button reactivates; click it for a retry.
+            log.warning(
+                "GetLaunchStatus failure (errorId=%s) — waiting for Open button to reactivate...",
+                body.get("errorId"),
+            )
+            try:
+                page.locator(".appDetails-action-launch:not(.hidden)").wait_for(
+                    timeout=remaining_ms()
+                )
+            except PlaywrightTimeoutError:
+                log.error("Open button did not reactivate after failure.")
+                return False
+
+            log.info("Open button reactivated — clicking for retry...")
+            try:
+                with page.expect_response(
+                    self._is_terminal_launch_status, timeout=remaining_ms()
+                ) as resp_info2:
+                    page.locator(".appDetails-action-launch").click()
+                terminal2 = resp_info2.value
+            except PlaywrightTimeoutError:
+                log.error("Timed out waiting for second terminal GetLaunchStatus response.")
+                return False
+
+            body2 = terminal2.json()
+            status2 = body2.get("status")
+            log.info(
+                "Terminal GetLaunchStatus (retry): status=%s errorId=%s",
+                status2,
+                body2.get("errorId"),
+            )
+
+            if status2 == "success":
+                return self._wait_for_download(page, deadline)
+
+            # Second failure — restart once then loop back; give up if already restarted.
+            if restarted:
+                log.error("ICA download failed after restart — giving up.")
+                return False
+
+            log.warning("Second GetLaunchStatus failure — restarting desktop...")
+            restarted = True
+            self._restart_desktop(page)
+
+            if self._pending_downloads:
+                log.info("Auto-download detected after restart.")
+                self._pending_downloads.pop(0).save_as(self._ica_file)
                 log.info("ICA saved to %s", self._ica_file)
                 return True
-            except PlaywrightTimeoutError:
-                log.warning("Download timed out after clicking Open — retrying...")
-                page.reload(wait_until="networkidle")
-
-        log.error("'Open' remained unavailable after %d attempts.", max_attempts)
-        return False
 
     def _restart_desktop(self, page) -> None:
         log.info("Clicking '%s' → Restart...", self.config.desktop_name)
