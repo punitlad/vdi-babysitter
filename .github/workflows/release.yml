@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  dev-release:
+    name: Dev release (latest-dev)
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        run: pip install build
+
+      - name: Build sdist
+        run: python -m build --sdist
+
+      - name: Get tarball path and SHA256
+        id: tarball
+        run: |
+          TARBALL=$(ls dist/*.tar.gz)
+          SHA256=$(sha256sum $TARBALL | awk '{print $1}')
+          echo "path=$TARBALL" >> $GITHUB_OUTPUT
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Update latest-dev GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-dev
+          name: "Dev build (latest)"
+          prerelease: true
+          files: ${{ steps.tarball.outputs.path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update dev formula in homebrew-tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          SHA256: ${{ steps.tarball.outputs.sha256 }}
+        run: |
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/punitlad/homebrew-tap.git
+          cd homebrew-tap
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/vdi-babysitter-dev.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/vdi-babysitter-dev.rb
+          git diff --cached --quiet || git commit -m "chore: update vdi-babysitter-dev sha256 [skip ci]"
+          git push
+
+  stable-release:
+    name: Stable release
+    runs-on: ubuntu-latest
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Verify this is a tag push
+        id: check-tag
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "is_tag=true" >> $GITHUB_OUTPUT
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          else
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        if: steps.check-tag.outputs.is_tag == 'true'
+        run: pip install build
+
+      - name: Build sdist and wheel
+        if: steps.check-tag.outputs.is_tag == 'true'
+        run: python -m build
+
+      - name: Create stable GitHub Release
+        if: steps.check-tag.outputs.is_tag == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.check-tag.outputs.tag }}
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update stable formula in homebrew-tap
+        if: steps.check-tag.outputs.is_tag == 'true'
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: vdi-babysitter
+          homebrew-tap: punitlad/homebrew-tap
+          base-branch: main
+          commit-message: "chore: bump vdi-babysitter to {{version}}"
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
