@@ -49,6 +49,11 @@
 - YubiKey presence check at startup (retry with notification if key not found)
 - `--log-level quiet` as default when running under launchd
 
+### Observability
+- Run status persistence — save outcome (success, failure, reason, etc.) to a structured log or state file after each invocation
+- Screenshot on failure — capture and save a browser screenshot to a configurable directory when any step fails
+- Post-launch session monitoring — after ICA download and Citrix Workspace startup, monitor the active session to confirm it actually came up (not just that the process launched)
+
 ### Reliability
 - `PowerOff` failure handling — pending Citrix API research on failure response shapes
 - Scenario 4 edge cases (post-restart `GetLaunchStatus` with `pollTimeout: 30`)
