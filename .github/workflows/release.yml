@@ -46,10 +46,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Get GitHub archive SHA256
+        id: archive
+        run: |
+          SHA256=$(curl -sL https://github.com/punitlad/vdi-babysitter/archive/refs/tags/latest-dev.tar.gz | sha256sum | awk '{print $1}')
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
       - name: Update dev formula in homebrew-tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          SHA256: ${{ steps.tarball.outputs.sha256 }}
+          SHA256: ${{ steps.archive.outputs.sha256 }}
         run: |
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/punitlad/homebrew-tap.git
           cd homebrew-tap
