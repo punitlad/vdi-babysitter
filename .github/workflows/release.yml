@@ -53,12 +53,35 @@ jobs:
         run: |
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/punitlad/homebrew-tap.git
           cd homebrew-tap
-          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/vdi-babysitter-dev.rb
+          sed -i "0,/sha256 \".*\"/s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/vdi-babysitter-dev.rb
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/vdi-babysitter-dev.rb
           git diff --cached --quiet || git commit -m "chore: update vdi-babysitter-dev sha256 [skip ci]"
           git push
+
+  brew-install-test:
+    name: Brew install test (${{ matrix.runner }})
+    needs: dev-release
+    strategy:
+      matrix:
+        runner: [macos-13, macos-latest]  # macos-13 = Intel, macos-latest = ARM64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Wait for Github CDN to update
+        run: |
+          sleep 10
+
+      - name: Tap and install vdi-babysitter-dev
+        run: |
+          brew tap punitlad/tap
+          brew install punitlad/tap/vdi-babysitter-dev
+
+      - name: Smoke test
+        run: |
+          vdi-babysitter --help
+          vdi-babysitter citrix connect --help
 
   stable-release:
     name: Stable release
