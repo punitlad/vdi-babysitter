@@ -66,3 +66,4 @@
 - Linux platform support
 - Default provider shorthand (skip `citrix` subcommand when only one provider configured)
 - `launchd` agent control plane: `start`, `stop`, `status`
+- macOS desktop app — native menu bar or windowed app wrapping the CLI for users who prefer a GUI; manage profiles, trigger connects, and monitor session status without the terminal
