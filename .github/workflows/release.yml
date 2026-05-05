@@ -71,7 +71,7 @@ jobs:
     needs: dev-release
     strategy:
       matrix:
-        runner: [macos-13, macos-latest]  # macos-13 = Intel, macos-latest = ARM64
+        runner: [macos-latest]
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -154,7 +154,7 @@ jobs:
     needs: stable-release
     strategy:
       matrix:
-        runner: [macos-13, macos-latest]  # macos-13 = Intel, macos-latest = ARM64
+        runner: [macos-latest]
     runs-on: ${{ matrix.runner }}
 
     steps:
