@@ -5,6 +5,8 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  push:
+    tags: ['v*']
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -13,7 +15,7 @@ jobs:
   dev-release:
     name: Dev release (latest-dev)
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: write
 
@@ -97,26 +99,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    if: |
-      github.event.workflow_run.conclusion == 'success' &&
-      startsWith(github.event.workflow_run.head_branch, 'v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-tags: true
-          ref: ${{ github.event.workflow_run.head_sha }}
-
-      - name: Verify this is a tag push
-        id: check-tag
-        run: |
-          TAG="${{ github.event.workflow_run.head_branch }}"
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
-            echo "is_tag=true" >> $GITHUB_OUTPUT
-            echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          else
-            echo "is_tag=false" >> $GITHUB_OUTPUT
-          fi
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -124,25 +110,21 @@ jobs:
           python-version: "3.12"
 
       - name: Install build
-        if: steps.check-tag.outputs.is_tag == 'true'
         run: pip install build
 
       - name: Build sdist and wheel
-        if: steps.check-tag.outputs.is_tag == 'true'
         run: python -m build
 
       - name: Create stable GitHub Release
-        if: steps.check-tag.outputs.is_tag == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.check-tag.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
           files: dist/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update stable formula in homebrew-tap
-        if: steps.check-tag.outputs.is_tag == 'true'
         uses: mislav/bump-homebrew-formula-action@v3
         with:
           formula-name: vdi-babysitter
