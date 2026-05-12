@@ -1,6 +1,7 @@
 """Citrix provider: authentication, ICA download, session management."""
 
 import logging
+import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -41,6 +42,9 @@ class CitrixProvider:
         """Full connect flow: auth → download ICA → launch Workspace → verify TCP."""
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         deadline = time.time() + self.config.timeout if self.config.timeout else None
+
+        if browser_path := os.environ.get("VDIBABYSITTER_PLAYWRIGHT_BROWSER_PATH"):
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browser_path
 
         with sync_playwright() as p:
             browser = p.chromium.launch(
