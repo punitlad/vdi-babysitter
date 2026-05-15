@@ -19,6 +19,7 @@ app = typer.Typer(
 def _root(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:
         print("Error: command argument required.", file=sys.stderr)
+        print(ctx.get_help())
         raise typer.Exit(1)
 
 citrix_app = typer.Typer(

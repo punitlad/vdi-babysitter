@@ -35,8 +35,12 @@ def main() -> None:
     if r.returncode == 0:
         print("FAIL: `vdi-babysitter` (no args) expected non-zero exit", file=sys.stderr)
         sys.exit(1)
-    if "Error: command argument required." not in r.stdout + r.stderr:
+    combined = r.stdout + r.stderr
+    if "Error: command argument required." not in combined:
         print("FAIL: `vdi-babysitter` (no args) missing expected error message", file=sys.stderr)
+        sys.exit(1)
+    if not all(t in combined for t in ("citrix", "configure", "use")):
+        print("FAIL: `vdi-babysitter` (no args) missing help content", file=sys.stderr)
         sys.exit(1)
 
     # Top-level --help
