@@ -47,7 +47,7 @@ def main():
             "citrix", "connect",
             "--download-only",
             "--output-dir", tmp,
-            "--verbose",
+            "--log-level", "info"
         ]
 
         # Pass OTP explicitly if set in .envrc (CITRIX_OTP → --otp flag,

@@ -85,6 +85,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Wait for Github CDN to update
         run: |
           sleep 10
@@ -95,9 +97,7 @@ jobs:
           brew install punitlad/tap/vdi-babysitter-dev
 
       - name: Smoke test
-        run: |
-          vdi-babysitter --help
-          vdi-babysitter citrix connect --help
+        run: python3 test_smoke.py
 
   stable-release:
     name: Stable release
@@ -148,6 +148,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Wait for Github CDN to update
         run: |
           sleep 10
@@ -158,6 +160,4 @@ jobs:
           brew install punitlad/tap/vdi-babysitter
 
       - name: Smoke test
-        run: |
-          vdi-babysitter --help
-          vdi-babysitter citrix connect --help
+        run: python3 test_smoke.py
