@@ -10,9 +10,16 @@ from vdi_babysitter.providers.citrix import commands as citrix_commands
 app = typer.Typer(
     name="vdi-babysitter",
     help="VDI session management CLI.",
-    no_args_is_help=True,
+    invoke_without_command=True,
     add_completion=False,
 )
+
+
+@app.callback()
+def _root(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is None:
+        print("Error: command argument required.", file=sys.stderr)
+        raise typer.Exit(1)
 
 citrix_app = typer.Typer(
     help="Citrix provider commands.",

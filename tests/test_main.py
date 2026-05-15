@@ -7,12 +7,10 @@ from vdi_babysitter.main import app
 runner = CliRunner()
 
 
-def test_no_args_shows_help():
+def test_no_args_shows_error():
     result = runner.invoke(app, [])
-    assert result.exit_code in (0, 2)
-    assert "citrix" in result.output
-    assert "configure" in result.output
-    assert "use" in result.output
+    assert result.exit_code == 1
+    assert "Error: command argument required." in result.output
 
 
 def test_use_sets_active_profile():

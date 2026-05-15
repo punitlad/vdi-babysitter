@@ -30,6 +30,15 @@ def main() -> None:
         print("ERROR: vdi-babysitter not found on PATH", file=sys.stderr)
         sys.exit(1)
 
+    # No args → error message, non-zero exit
+    r = subprocess.run(["vdi-babysitter"], capture_output=True, text=True)
+    if r.returncode == 0:
+        print("FAIL: `vdi-babysitter` (no args) expected non-zero exit", file=sys.stderr)
+        sys.exit(1)
+    if "Error: command argument required." not in r.stdout + r.stderr:
+        print("FAIL: `vdi-babysitter` (no args) missing expected error message", file=sys.stderr)
+        sys.exit(1)
+
     # Top-level --help
     r = run(["vdi-babysitter", "--help"])
     assert_contains(r.stdout + r.stderr, "citrix", "configure", "use", cmd="vdi-babysitter --help")
