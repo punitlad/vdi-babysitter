@@ -41,7 +41,7 @@ citrix_app.command("status")(citrix_commands.status)
 def version() -> None:
     """Show the installed version."""
     if __sha__:
-        print(f"dev ({__sha__})")
+        print(__sha__)
     else:
         print(f"v{_pkg_version('vdi-babysitter')}")
 

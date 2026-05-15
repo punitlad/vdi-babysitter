@@ -24,11 +24,18 @@ def test_version_stable():
     assert "v1.0.1" in result.output
 
 
-def test_version_dev():
+def test_version_dev_local():
+    with patch("vdi_babysitter.main.__sha__", "dev"):
+        result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert result.output.strip() == "dev"
+
+
+def test_version_dev_build():
     with patch("vdi_babysitter.main.__sha__", "abc1234"):
         result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "dev (abc1234)" in result.output
+    assert result.output.strip() == "abc1234"
 
 
 def test_use_sets_active_profile():

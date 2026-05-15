@@ -1,1 +1,1 @@
-__sha__ = None
+__sha__ = "dev"
