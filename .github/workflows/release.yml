@@ -32,13 +32,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build
-        run: pip install build
+      - name: Install build and sd
+        run: |
+          pip install build
+          cargo install sd --locked
 
       - name: Inject git SHA for dev build
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
-          sed -i "s/__sha__ = \"dev\"/__sha__ = \"${SHORT_SHA}\"/" vdi_babysitter/_version.py
+          sd \"dev\" \"${SHORT_SHA}\" vdi_babysitter/_version.py
 
       - name: Build sdist
         run: python -m build --sdist
@@ -122,11 +124,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build
-        run: pip install build
+      - name: Install build and sd
+        run: |
+          pip install build
+          cargo install sd --locked
 
       - name: Clear dev SHA for stable build
-        run: sed -i 's/__sha__ = "dev"/__sha__ = None/' vdi_babysitter/_version.py
+        run: sd \"dev\" None vdi_babysitter/_version.py
 
       - name: Build sdist and wheel
         run: python -m build
