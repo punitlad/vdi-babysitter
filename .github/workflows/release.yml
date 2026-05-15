@@ -35,6 +35,11 @@ jobs:
       - name: Install build
         run: pip install build
 
+      - name: Inject git SHA for dev build
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          sed -i "s/__sha__ = None/__sha__ = \"${SHORT_SHA}\"/" vdi_babysitter/_version.py
+
       - name: Build sdist
         run: python -m build --sdist
 
@@ -96,8 +101,11 @@ jobs:
           brew tap punitlad/tap
           brew install punitlad/tap/vdi-babysitter-dev
 
+      - name: Install pytest
+        run: pip3 install pytest --quiet
+
       - name: Smoke test
-        run: python3 test_smoke.py
+        run: pytest test_smoke.py -v
 
   stable-release:
     name: Stable release
@@ -159,5 +167,8 @@ jobs:
           brew tap punitlad/tap
           brew install punitlad/tap/vdi-babysitter
 
+      - name: Install pytest
+        run: pip3 install pytest --quiet
+
       - name: Smoke test
-        run: python3 test_smoke.py
+        run: pytest test_smoke.py -v

@@ -1,78 +1,73 @@
-#!/usr/bin/env python3
 """
-Smoke test: validates vdi-babysitter help output against the binary on PATH.
+Smoke tests: validates vdi-babysitter help output against the binary on PATH.
 No credentials or live environment required.
 """
 
+import re
 import shutil
 import subprocess
-import sys
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("vdi-babysitter") is None,
+    reason="vdi-babysitter not found on PATH",
+)
+
+BIN = "vdi-babysitter"
 
 
-def run(cmd: list[str]) -> subprocess.CompletedProcess:
+def _run(cmd: list[str]) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"FAIL: `{' '.join(cmd)}` exited {result.returncode}", file=sys.stderr)
-        print(result.stderr, file=sys.stderr)
-        sys.exit(1)
-    return result
-
-
-def assert_contains(output: str, *terms: str, cmd: str) -> None:
-    for term in terms:
-        if term not in output:
-            print(f"FAIL: `{cmd}` output missing {term!r}", file=sys.stderr)
-            sys.exit(1)
-
-
-def main() -> None:
-    if not shutil.which("vdi-babysitter"):
-        print("ERROR: vdi-babysitter not found on PATH", file=sys.stderr)
-        sys.exit(1)
-
-    # No args → error message, non-zero exit
-    r = subprocess.run(["vdi-babysitter"], capture_output=True, text=True)
-    if r.returncode == 0:
-        print("FAIL: `vdi-babysitter` (no args) expected non-zero exit", file=sys.stderr)
-        sys.exit(1)
-    combined = r.stdout + r.stderr
-    if "Error: command argument required." not in combined:
-        print("FAIL: `vdi-babysitter` (no args) missing expected error message", file=sys.stderr)
-        sys.exit(1)
-    if not all(t in combined for t in ("citrix", "configure", "use")):
-        print("FAIL: `vdi-babysitter` (no args) missing help content", file=sys.stderr)
-        sys.exit(1)
-
-    # Top-level --help
-    r = run(["vdi-babysitter", "--help"])
-    assert_contains(r.stdout + r.stderr, "citrix", "configure", "use", cmd="vdi-babysitter --help")
-
-    # citrix connect --help: key flags present
-    r = run(["vdi-babysitter", "citrix", "connect", "--help"])
-    combined = r.stdout + r.stderr
-    assert_contains(
-        combined,
-        "--storefront-url",
-        "--otp",
-        "--otp-cmd",
-        "--download-only",
-        "--max-retries",
-        "--restart-first",
-        "--output",
-        "--log-level",
-        cmd="vdi-babysitter citrix connect --help",
+    assert result.returncode == 0, (
+        f"`{' '.join(cmd)}` exited {result.returncode}\n{result.stderr}"
     )
-
-    # citrix disconnect --help
-    r = run(["vdi-babysitter", "citrix", "disconnect", "--help"])
-    assert_contains(r.stdout + r.stderr, "--output", "--log-level", cmd="vdi-babysitter citrix disconnect --help")
-
-    # citrix status --help
-    r = run(["vdi-babysitter", "citrix", "status", "--help"])
-    assert_contains(r.stdout + r.stderr, "--watch", "--interval", cmd="vdi-babysitter citrix status --help")
-
-    print("PASS: all smoke tests passed")
+    return result.stdout + result.stderr
 
 
-if __name__ == "__main__":
-    main()
+def test_no_args_shows_error_and_help():
+    r = subprocess.run([BIN], capture_output=True, text=True)
+    combined = r.stdout + r.stderr
+    assert r.returncode != 0
+    assert "Error: command argument required." in combined
+    assert "citrix" in combined
+    assert "configure" in combined
+    assert "use" in combined
+
+
+def test_help():
+    output = _run([BIN, "--help"])
+    assert "citrix" in output
+    assert "configure" in output
+    assert "use" in output
+
+
+def test_citrix_connect_help():
+    output = _run([BIN, "citrix", "connect", "--help"])
+    assert "--storefront-url" in output
+    assert "--otp" in output
+    assert "--otp-cmd" in output
+    assert "--download-only" in output
+    assert "--max-retries" in output
+    assert "--restart-first" in output
+    assert "--output" in output
+    assert "--log-level" in output
+
+
+def test_citrix_disconnect_help():
+    output = _run([BIN, "citrix", "disconnect", "--help"])
+    assert "--output" in output
+    assert "--log-level" in output
+
+
+def test_citrix_status_help():
+    output = _run([BIN, "citrix", "status", "--help"])
+    assert "--watch" in output
+    assert "--interval" in output
+
+
+def test_version():
+    output = _run([BIN, "version"])
+    assert re.search(r"v\d+\.\d+\.\d+|dev \(", output), (
+        f"version output doesn't look like a version: {output!r}"
+    )

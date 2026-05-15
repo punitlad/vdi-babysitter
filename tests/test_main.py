@@ -16,6 +16,21 @@ def test_no_args_shows_error():
     assert "use" in result.output
 
 
+def test_version_stable():
+    with patch("vdi_babysitter.main.__sha__", None):
+        with patch("vdi_babysitter.main._pkg_version", return_value="1.0.1"):
+            result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert "v1.0.1" in result.output
+
+
+def test_version_dev():
+    with patch("vdi_babysitter.main.__sha__", "abc1234"):
+        result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert "dev (abc1234)" in result.output
+
+
 def test_use_sets_active_profile():
     with patch("vdi_babysitter.main.set_active_profile") as mock_set:
         result = runner.invoke(app, ["use", "work"])

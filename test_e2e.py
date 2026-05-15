@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 End-to-end test: runs `vdi-babysitter citrix connect --download-only`
 against the live Citrix environment and validates that session.ica downloads.
@@ -8,17 +7,18 @@ Reads credentials from .envrc in the project root.
 
 import os
 import re
+import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parent
-CLI = ROOT / ".venv" / "bin" / "vdi-babysitter"
+_ENVRC = ROOT / ".envrc"
 
 
-def load_envrc(path: Path) -> dict:
-    """Parse key=value pairs from a .envrc file (handles export and quoted values)."""
+def _load_envrc(path: Path) -> dict:
     env = {}
     for line in path.read_text().splitlines():
         line = line.strip()
@@ -31,51 +31,37 @@ def load_envrc(path: Path) -> dict:
     return env
 
 
-def main():
-    envrc = ROOT / ".envrc"
-    if not envrc.exists():
-        print("ERROR: .envrc not found", file=sys.stderr)
-        sys.exit(1)
+@pytest.fixture(scope="module")
+def cli() -> str:
+    binary = shutil.which("vdi-babysitter")
+    if not binary:
+        pytest.skip("vdi-babysitter not found on PATH")
+    return binary
 
-    envrc_vars = load_envrc(envrc)
 
+@pytest.fixture(scope="module")
+def envrc_vars() -> dict:
+    if not _ENVRC.exists():
+        pytest.skip(".envrc not found")
+    return _load_envrc(_ENVRC)
+
+
+def test_ica_download(cli, envrc_vars):
     with tempfile.TemporaryDirectory() as tmp:
-        env = {**os.environ, **envrc_vars}
-
         cmd = [
-            str(CLI),
+            cli,
             "citrix", "connect",
             "--download-only",
             "--output-dir", tmp,
-            "--log-level", "info"
+            "--log-level", "info",
         ]
-
-        # Pass OTP explicitly if set in .envrc (CITRIX_OTP → --otp flag,
-        # since OTP is no longer read from env vars by the CLI).
         otp = envrc_vars.get("CITRIX_OTP")
         if otp:
             cmd += ["--otp", otp]
 
-        print(f"=== Running: {' '.join(cmd)} ===")
-        result = subprocess.run(cmd, env=env)
+        result = subprocess.run(cmd, env={**os.environ, **envrc_vars})
+        assert result.returncode == 0, f"vdi-babysitter exited {result.returncode}"
 
-        print()
         ica = Path(tmp) / "session.ica"
-
-        if result.returncode != 0:
-            print(f"FAIL: vdi-babysitter exited with code {result.returncode}")
-            sys.exit(1)
-
-        if not ica.exists():
-            print(f"FAIL: session.ica not found in {tmp}")
-            sys.exit(1)
-
-        if ica.stat().st_size == 0:
-            print("FAIL: session.ica is empty")
-            sys.exit(1)
-
-        print(f"PASS: session.ica downloaded ({ica.stat().st_size} bytes)")
-
-
-if __name__ == "__main__":
-    main()
+        assert ica.exists(), f"session.ica not found in {tmp}"
+        assert ica.stat().st_size > 0, "session.ica is empty"
