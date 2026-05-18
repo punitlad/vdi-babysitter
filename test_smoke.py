@@ -22,7 +22,8 @@ def _run(cmd: list[str]) -> str:
     assert result.returncode == 0, (
         f"`{' '.join(cmd)}` exited {result.returncode}\n{result.stderr}"
     )
-    return result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    return re.sub(r"\x1b\[[0-9;]*m", "", output)
 
 
 def test_no_args_shows_error_and_help():
