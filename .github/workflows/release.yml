@@ -53,6 +53,11 @@ jobs:
           echo "path=$TARBALL" >> $GITHUB_OUTPUT
           echo "sha256=$SHA256" >> $GITHUB_OUTPUT
 
+      - name: Move latest-dev tag to current commit
+        run: |
+          git tag -f latest-dev HEAD
+          git push origin latest-dev --force
+
       - name: Update latest-dev GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -66,6 +71,7 @@ jobs:
       - name: Get GitHub archive SHA256
         id: archive
         run: |
+          sleep 10
           SHA256=$(curl -sL https://github.com/punitlad/vdi-babysitter/archive/refs/tags/latest-dev.tar.gz | sha256sum | awk '{print $1}')
           echo "sha256=$SHA256" >> $GITHUB_OUTPUT
 
@@ -96,7 +102,7 @@ jobs:
 
       - name: Wait for Github CDN to update
         run: |
-          sleep 10
+          sleep 30
 
       - name: Tap and install vdi-babysitter-dev
         run: |
