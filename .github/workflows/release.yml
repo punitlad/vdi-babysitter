@@ -103,11 +103,8 @@ jobs:
           brew tap punitlad/tap
           brew install punitlad/tap/vdi-babysitter-dev
 
-      - name: Install pytest
-        run: pip3 install pytest --quiet
-
       - name: Smoke test
-        run: pytest test_smoke.py -v
+        run: pipx run pytest test_smoke.py -v
 
   stable-release:
     name: Stable release
@@ -174,8 +171,5 @@ jobs:
           brew tap punitlad/tap
           brew install punitlad/tap/vdi-babysitter
 
-      - name: Install pytest
-        run: pip3 install pytest --quiet
-
       - name: Smoke test
-        run: pytest test_smoke.py -v
+        run: pipx run pytest test_smoke.py -v
