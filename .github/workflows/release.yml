@@ -68,25 +68,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get GitHub archive SHA256
-        id: archive
-        run: |
-          sleep 10
-          SHA256=$(curl -sL https://github.com/punitlad/vdi-babysitter/archive/refs/tags/latest-dev.tar.gz | sha256sum | awk '{print $1}')
-          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
-
       - name: Update dev formula in homebrew-tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          SHA256: ${{ steps.archive.outputs.sha256 }}
+          SHA256: ${{ steps.tarball.outputs.sha256 }}
+          TARBALL_PATH: ${{ steps.tarball.outputs.path }}
         run: |
+          TARBALL_FILENAME=$(basename "${TARBALL_PATH}")
+          SDIST_URL="https://github.com/punitlad/vdi-babysitter/releases/download/latest-dev/${TARBALL_FILENAME}"
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/punitlad/homebrew-tap.git
           cd homebrew-tap
+          sed -i "1,10s|url \".*\"|url \"${SDIST_URL}\"|" Formula/vdi-babysitter-dev.rb
           sed -i "0,/sha256 \".*\"/s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/vdi-babysitter-dev.rb
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/vdi-babysitter-dev.rb
-          git diff --cached --quiet || git commit -m "chore: update vdi-babysitter-dev sha256 [skip ci]"
+          git diff --cached --quiet || git commit -m "chore: update vdi-babysitter-dev to ${TARBALL_FILENAME} [skip ci]"
           git push
 
   brew-install-test-dev:
