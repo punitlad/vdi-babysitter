@@ -16,6 +16,7 @@ import pytest
 
 ROOT = Path(__file__).parent
 _ENVRC = ROOT / ".envrc"
+_BIN = os.environ.get("VDI_BABYSITTER_CMD", "vdi-babysitter")
 
 
 def _load_envrc(path: Path) -> dict:
@@ -33,10 +34,9 @@ def _load_envrc(path: Path) -> dict:
 
 @pytest.fixture(scope="module")
 def cli() -> str:
-    binary = shutil.which("vdi-babysitter")
-    if not binary:
-        pytest.skip("vdi-babysitter not found on PATH")
-    return binary
+    if not shutil.which(_BIN):
+        pytest.skip(f"vdi-babysitter binary not found: {_BIN}")
+    return _BIN
 
 
 @pytest.fixture(scope="module")
