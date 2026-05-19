@@ -46,26 +46,36 @@ def test_help():
 
 def test_citrix_connect_help():
     output = _run([BIN, "citrix", "connect", "--help"])
-    assert "--storefront-url" in output
-    assert "--otp" in output
-    assert "--otp-cmd" in output
-    assert "--download-only" in output
-    assert "--max-retries" in output
-    assert "--restart-first" in output
-    assert "--output" in output
-    assert "--log-level" in output
+    assert "Global Options" in output
+    before, after = output.split("Global Options", 1)
+    # command-specific options in Options panel
+    for flag in ("--storefront-url", "--otp", "--otp-cmd", "--download-only",
+                 "--max-retries", "--restart-first", "--timeout"):
+        assert flag in before, f"{flag} should be in Options, not Global Options"
+    # global options in Global Options panel — use trailing space to avoid
+    # matching --output as a prefix of --output-dir in the Options panel
+    for flag in ("--profile", "--output", "--log-level"):
+        assert f"{flag} " in after, f"{flag} should be in Global Options"
+        assert f"{flag} " not in before, f"{flag} should not be in Options"
 
 
 def test_citrix_disconnect_help():
     output = _run([BIN, "citrix", "disconnect", "--help"])
-    assert "--output" in output
-    assert "--log-level" in output
+    assert "Global Options" in output
+    _, after = output.split("Global Options", 1)
+    for flag in ("--profile", "--output", "--log-level"):
+        assert flag in after, f"{flag} should be in Global Options"
 
 
 def test_citrix_status_help():
     output = _run([BIN, "citrix", "status", "--help"])
-    assert "--watch" in output
-    assert "--interval" in output
+    assert "Global Options" in output
+    before, after = output.split("Global Options", 1)
+    for flag in ("--watch", "--interval"):
+        assert flag in before, f"{flag} should be in Options, not Global Options"
+    for flag in ("--profile", "--output", "--log-level"):
+        assert f"{flag} " in after, f"{flag} should be in Global Options"
+        assert f"{flag} " not in before, f"{flag} should not be in Options"
 
 
 def test_version():
