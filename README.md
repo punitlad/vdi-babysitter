@@ -189,6 +189,34 @@ If `CITRIX_OTP` is not set in `.envrc`, a native macOS dialog will appear — ta
 
 ---
 
+## Debug mode
+
+> For power users and issue reporters only.
+
+If `vdi-babysitter` is failing and you want to capture diagnostic information to share with the maintainer, you can enable debug mode. It requires two deliberate steps — both are required and the tool will hard-fail if only one is present.
+
+**1. Create `~/.vdi-babysitter/debug.yaml`:**
+
+```yaml
+playwright_trace: true
+playwright_slow_mo: 0   # ms delay between Playwright actions; 0 = disabled
+capture_screenshots: false
+capture_html: false
+keep_runs: 5            # number of debug output directories to retain
+```
+
+**2. Set the environment variable when invoking the command:**
+
+```bash
+VDI_BABYSITTER_DEBUG=1 vdi-babysitter citrix connect ...
+```
+
+`VDI_BABYSITTER_DEBUG` is intentionally hidden from `--help`. Artifact capture (Playwright traces, run statistics, screenshots) is being added incrementally — see [ROADMAP.md](./ROADMAP.md) for what's in each version.
+
+> **Privacy note:** All debug artifacts are stored locally only, in a timestamped directory under `~/.vdi-babysitter/debug/`. Attaching them to a GitHub issue is your choice — be aware they may contain SSO URLs and session data.
+
+---
+
 ## Built by
 
 This tool was built in conjunction with [BMad](https://github.com/bmadcode/bmad-method) and [Claude](https://claude.ai/claude-code) — the brainstorming, architecture decisions, and implementation were all done collaboratively through an AI-assisted development session.

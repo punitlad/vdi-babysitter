@@ -7,6 +7,7 @@ from importlib.metadata import version as _pkg_version
 from vdi_babysitter._version import __sha__
 from vdi_babysitter.config import get_active_profile, set_active_profile
 from vdi_babysitter.configure_commands import configure_app
+from vdi_babysitter.debug import load_debug_config
 from vdi_babysitter.providers.citrix import commands as citrix_commands
 
 app = typer.Typer(
@@ -19,6 +20,7 @@ app = typer.Typer(
 
 @app.callback()
 def _root(ctx: typer.Context) -> None:
+    load_debug_config()
     if ctx.invoked_subcommand is None:
         print("Error: command argument required.", file=sys.stderr)
         print(ctx.get_help())
