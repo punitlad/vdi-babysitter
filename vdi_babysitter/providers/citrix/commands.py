@@ -42,9 +42,9 @@ def connect(
     no_headless: bool = typer.Option(False, "--no-headless", help="Show the browser window."),
     download_only: bool = typer.Option(False, "--download-only", envvar="CITRIX_DOWNLOAD_ONLY", help="Exit after saving ICA, skip Workspace launch."),
     timeout: Optional[int] = typer.Option(None, "--timeout", help="Max wall-clock seconds for the entire connect operation."),
-    profile: Optional[str] = typer.Option(None, "--profile", envvar="VDI_BABYSITTER_PROFILE", help="Config profile to use."),
-    output: str = typer.Option("text", "--output", help="Output format: text, json."),
-    log_level: Optional[str] = typer.Option(None, "--log-level", help="Log verbosity: debug, info, quiet. Defaults to quiet when --output json, otherwise info."),
+    profile: Optional[str] = typer.Option(None, "--profile", envvar="VDI_BABYSITTER_PROFILE", help="Config profile to use.", rich_help_panel="Global Options"),
+    output: str = typer.Option("text", "--output", help="Output format: text, json.", rich_help_panel="Global Options"),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="Log verbosity: debug, info, quiet. Defaults to quiet when --output json, otherwise info.", rich_help_panel="Global Options"),
 ) -> None:
     """Connect to a Citrix VDI session."""
     resolved_log_level = log_level or ("quiet" if output == "json" else "info")
@@ -112,9 +112,9 @@ def connect(
 
 
 def disconnect(
-    profile: Optional[str] = typer.Option(None, "--profile", envvar="VDI_BABYSITTER_PROFILE", help="Config profile to use."),
-    output: str = typer.Option("text", "--output", help="Output format: text, json."),
-    log_level: Optional[str] = typer.Option(None, "--log-level", help="Log verbosity: debug, info, quiet."),
+    profile: Optional[str] = typer.Option(None, "--profile", envvar="VDI_BABYSITTER_PROFILE", help="Config profile to use.", rich_help_panel="Global Options"),
+    output: str = typer.Option("text", "--output", help="Output format: text, json.", rich_help_panel="Global Options"),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="Log verbosity: debug, info, quiet.", rich_help_panel="Global Options"),
 ) -> None:
     """Disconnect the active Citrix session."""
     resolved_log_level = log_level or ("quiet" if output == "json" else "info")
@@ -136,9 +136,9 @@ def disconnect(
 def status(
     watch: bool = typer.Option(False, "--watch", help="Continuously poll connection status."),
     interval: int = typer.Option(30, "--interval", help="Poll interval in seconds (--watch only)."),
-    profile: Optional[str] = typer.Option(None, "--profile", envvar="VDI_BABYSITTER_PROFILE", help="Config profile to use."),
-    output: str = typer.Option("text", "--output", help="Output format: text, json."),
-    log_level: Optional[str] = typer.Option(None, "--log-level", help="Log verbosity: debug, info, quiet."),
+    profile: Optional[str] = typer.Option(None, "--profile", envvar="VDI_BABYSITTER_PROFILE", help="Config profile to use.", rich_help_panel="Global Options"),
+    output: str = typer.Option("text", "--output", help="Output format: text, json.", rich_help_panel="Global Options"),
+    log_level: Optional[str] = typer.Option(None, "--log-level", help="Log verbosity: debug, info, quiet.", rich_help_panel="Global Options"),
 ) -> None:
     """Check whether a Citrix session is connected (TCP)."""
     resolved_log_level = log_level or ("quiet" if output == "json" else "info")
