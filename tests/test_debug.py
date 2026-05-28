@@ -211,3 +211,192 @@ def test_prune_zero_keep_runs_is_noop(tmp_path):
     _make_run_dirs(tmp_path, 3)
     prune_old_runs(tmp_path, keep_runs=0)
     assert len(list(tmp_path.iterdir())) == 3
+
+
+# --- manifest.json ---
+
+def test_write_success_creates_manifest(tmp_path):
+    config = DebugConfig()
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.crumb("navigating to StoreFront")
+    session.crumb("authentication complete")
+    session.write(outcome="success")
+
+    import json
+    manifest = json.loads((session.run_dir / "manifest.json").read_text())
+    assert manifest["outcome"] == "success"
+    assert manifest["retries"] == 0
+    assert manifest["failed_at_step"] is None
+    assert any("authentication complete" in e for e in manifest["orchestration_flow"])
+    assert "tldr" in manifest
+    assert manifest["tldr"].startswith("CONNECTED")
+
+
+def test_write_failure_manifest_has_failed_step(tmp_path):
+    import json
+    config = DebugConfig()
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.crumb("verifying TCP connection")
+    session.write(outcome="failed", exc=RuntimeError("timeout"))
+
+    manifest = json.loads((session.run_dir / "manifest.json").read_text())
+    assert manifest["outcome"] == "failed"
+    assert manifest["failed_at_step"] == "verifying TCP connection"
+    assert manifest["tldr"].startswith("FAILED")
+    assert any("verifying TCP connection" in e for e in manifest["orchestration_flow"])
+
+
+def test_manifest_contains_version_info(tmp_path):
+    import json
+    config = DebugConfig()
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.write(outcome="success")
+
+    manifest = json.loads((session.run_dir / "manifest.json").read_text())
+    assert "vdi_babysitter" in manifest
+    assert "python" in manifest
+    assert "platform" in manifest
+    assert isinstance(manifest["duration_s"], float)
+
+
+# --- capture_locals ---
+
+def test_write_failure_with_capture_locals_includes_locals(tmp_path):
+    config = DebugConfig(capture_locals=True)
+    session = create_debug_session(config, base_dir=tmp_path)
+
+    def _raise():
+        local_var = "sensitive"
+        raise RuntimeError("locals test")
+
+    try:
+        _raise()
+    except RuntimeError as exc:
+        session.write(outcome="failed", exc=exc, exc_tb="ignored when capture_locals is on")
+
+    block = (session.run_dir / "failure_block.txt").read_text()
+    assert "traceback (with locals):" in block
+    assert "local_var" in block
+    assert "traceback:" not in block.replace("traceback (with locals):", "")
+
+
+def test_write_failure_without_capture_locals_uses_exc_tb(tmp_path):
+    config = DebugConfig(capture_locals=False)
+    session = create_debug_session(config, base_dir=tmp_path)
+    try:
+        raise ValueError("plain tb test")
+    except ValueError as exc:
+        session.write(
+            outcome="failed",
+            exc=exc,
+            exc_tb="Traceback (most recent call last):\n  ...\nValueError: plain tb test",
+        )
+
+    block = (session.run_dir / "failure_block.txt").read_text()
+    assert "traceback:" in block
+    assert "traceback (with locals):" not in block
+
+
+def test_capture_locals_parsed_from_yaml(monkeypatch, tmp_path):
+    monkeypatch.setenv("VDI_BABYSITTER_DEBUG", "1")
+    cfg = tmp_path / "debug.yaml"
+    cfg.write_text("capture_locals: true\n")
+    result = load_debug_config(debug_config_path=cfg)
+    assert result.capture_locals is True
+
+
+# --- playwright actions ---
+
+def test_record_action_appends_with_timestamp(tmp_path):
+    config = DebugConfig()
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.record_action("click #signOnButton")
+    session.record_action("fill input[type='password']")
+    assert len(session._pw_actions) == 2
+    assert "click #signOnButton" in session._pw_actions[0]
+    assert "fill input[type='password']" in session._pw_actions[1]
+    # timestamps present — format HH:MM:SS.mmm
+    assert session._pw_actions[0].startswith("[")
+
+
+def test_write_failure_includes_playwright_actions(tmp_path):
+    config = DebugConfig()
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.record_action("goto https://citrix.example.com")
+    session.record_action("click #signOnButton")
+    session.write(outcome="failed", exc=RuntimeError("boom"))
+
+    block = (session.run_dir / "failure_block.txt").read_text()
+    assert "playwright actions:" in block
+    assert "goto https://citrix.example.com" in block
+    assert "click #signOnButton" in block
+
+
+def test_write_success_omits_playwright_actions_from_failure_block(tmp_path):
+    config = DebugConfig()
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.record_action("goto https://citrix.example.com")
+    session.write(outcome="success")
+    assert not (session.run_dir / "failure_block.txt").exists()
+
+
+def test_write_failure_no_actions_omits_section(tmp_path):
+    config = DebugConfig()
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.write(outcome="failed", exc=RuntimeError("no actions"))
+
+    block = (session.run_dir / "failure_block.txt").read_text()
+    assert "playwright actions:" not in block
+
+
+# --- post-failure re-run prompt ---
+
+def test_failure_prints_trace_command_when_trace_enabled(tmp_path, capsys):
+    config = DebugConfig(playwright_trace=True)
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.write(outcome="failed", exc=RuntimeError("x"))
+    err = capsys.readouterr().err
+    assert "playwright show-trace" in err
+    assert "trace.zip" in err
+
+
+def test_failure_no_trace_command_when_trace_disabled(tmp_path, capsys):
+    config = DebugConfig(playwright_trace=False)
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.write(outcome="failed", exc=RuntimeError("x"))
+    err = capsys.readouterr().err
+    assert "playwright show-trace" not in err
+
+
+def test_failure_hints_for_disabled_capture_options(tmp_path, capsys):
+    config = DebugConfig(capture_screenshots=False, capture_html=False, capture_locals=False)
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.write(outcome="failed", exc=RuntimeError("x"))
+    err = capsys.readouterr().err
+    assert "capture_screenshots" in err
+    assert "capture_html" in err
+    assert "capture_locals" in err
+
+
+def test_failure_no_hints_when_all_captures_enabled(tmp_path, capsys):
+    config = DebugConfig(
+        playwright_trace=False,
+        capture_screenshots=True,
+        capture_html=True,
+        capture_locals=True,
+    )
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.write(outcome="failed", exc=RuntimeError("x"))
+    err = capsys.readouterr().err
+    assert "capture_screenshots" not in err
+    assert "capture_html" not in err
+    assert "capture_locals" not in err
+
+
+def test_success_prints_no_hints(tmp_path, capsys):
+    config = DebugConfig(capture_screenshots=False, capture_html=False, capture_locals=False)
+    session = create_debug_session(config, base_dir=tmp_path)
+    session.write(outcome="success")
+    err = capsys.readouterr().err
+    assert "capture_screenshots" not in err
+    assert "playwright show-trace" not in err

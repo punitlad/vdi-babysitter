@@ -1,5 +1,6 @@
 """Debug mode activation, config loading, and session artifact management."""
 
+import json
 import os
 import platform
 import shutil
@@ -23,6 +24,7 @@ VALID_DEBUG_KEYS = {
     "playwright_slow_mo",
     "capture_screenshots",
     "capture_html",
+    "capture_locals",
     "keep_runs",
 }
 
@@ -33,6 +35,7 @@ class DebugConfig:
     playwright_slow_mo: int = 0
     capture_screenshots: bool = False
     capture_html: bool = False
+    capture_locals: bool = False
     keep_runs: int = 5
 
 
@@ -42,6 +45,7 @@ class DebugSession:
     run_dir: Path
     _start: float = field(default_factory=lambda: __import__("time").time())
     _crumbs: list = field(default_factory=list)
+    _pw_actions: list = field(default_factory=list)
     _retries: int = 0
     _step: str = "startup"
 
@@ -49,6 +53,10 @@ class DebugSession:
         ts = datetime.now().strftime("%H:%M:%S")
         self._crumbs.append(f"[{ts}] {step}")
         self._step = step
+
+    def record_action(self, action: str) -> None:
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        self._pw_actions.append(f"[{ts}] {action}")
 
     def retry(self) -> None:
         self._retries += 1
@@ -93,15 +101,58 @@ class DebugSession:
         flow = "\n".join([tldr, ""] + self._crumbs)
         (self.run_dir / "orchestration_flow.txt").write_text(flow + "\n")
 
+        manifest = {
+            "outcome": outcome,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "duration_s": round(elapsed, 1),
+            "retries": self._retries,
+            "tldr": tldr,
+            "failed_at_step": self._step if outcome == "failed" else None,
+            "vdi_babysitter": pkg_ver,
+            "python": sys.version.split()[0],
+            "platform": platform.platform(),
+            "orchestration_flow": self._crumbs,
+        }
+        (self.run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
         if exc is not None:
             block_parts = [
                 f"step:  {self._step}",
                 f"url:   {page_url or 'unknown'}",
                 f"error: {type(exc).__name__}: {exc}",
             ]
-            if exc_tb:
+
+            if self.config.capture_locals and exc.__traceback__ is not None:
+                te = _tb.TracebackException.from_exception(exc, capture_locals=True)
+                block_parts += ["", "traceback (with locals):", "".join(te.format())]
+            elif exc_tb:
                 block_parts += ["", "traceback:", exc_tb]
+
+            if self._pw_actions:
+                block_parts += ["", "playwright actions:"] + self._pw_actions
+
             (self.run_dir / "failure_block.txt").write_text("\n".join(block_parts) + "\n")
+
+        if outcome == "failed":
+            if self.config.playwright_trace:
+                print(
+                    f"\nTo view the Playwright trace:\n"
+                    f"  playwright show-trace {self.run_dir / 'trace.zip'}",
+                    file=sys.stderr,
+                )
+            hints = []
+            if not self.config.capture_screenshots:
+                hints.append("  capture_screenshots: true   # browser screenshot at failure")
+            if not self.config.capture_html:
+                hints.append("  capture_html: true          # page DOM at failure")
+            if not self.config.capture_locals:
+                hints.append("  capture_locals: true        # variable state at each traceback frame")
+            if hints:
+                print(
+                    "\nTo capture more detail on the next run, add to debug.yaml:\n"
+                    + "\n".join(hints),
+                    file=sys.stderr,
+                )
 
 
 def create_debug_session(config: DebugConfig, base_dir: Optional[Path] = None) -> DebugSession:
@@ -158,5 +209,6 @@ def load_debug_config(debug_config_path: Optional[Path] = None) -> Optional[Debu
         playwright_slow_mo=raw.get("playwright_slow_mo", 0),
         capture_screenshots=raw.get("capture_screenshots", False),
         capture_html=raw.get("capture_html", False),
+        capture_locals=raw.get("capture_locals", False),
         keep_runs=raw.get("keep_runs", 5),
     )

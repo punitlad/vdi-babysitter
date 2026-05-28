@@ -44,6 +44,10 @@ class CitrixProvider:
             create_debug_session(debug_config) if debug_config else None
         )
 
+    def _pw(self, action: str) -> None:
+        if self._debug:
+            self._debug.record_action(action)
+
     def connect(self) -> None:
         """Full connect flow: auth → download ICA → launch Workspace → verify TCP."""
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -226,9 +230,11 @@ class CitrixProvider:
             dbg.crumb("navigating to StoreFront")
         log.info("Navigating to StoreFront...")
         page.goto(self.config.storefront_url, wait_until="domcontentloaded")
+        self._pw(f"goto {self.config.storefront_url}")
 
         log.info("Waiting for SSO login page...")
         page.wait_for_selector("input[type='password']", timeout=20_000)
+        self._pw("wait_for_selector input[type='password']")
 
         for sel in [
             "input[name='username']",
@@ -238,24 +244,30 @@ class CitrixProvider:
         ]:
             if page.locator(sel).count() > 0:
                 page.locator(sel).first.fill(self.config.username)
+                self._pw(f"fill {sel}")
                 break
 
         if dbg:
             dbg.crumb("submitting credentials")
         page.locator("input[type='password']").fill(self.config.password)
+        self._pw("fill input[type='password']")
         log.info("Clicking Sign On...")
         page.locator("#signOnButton").click()
+        self._pw("click #signOnButton")
 
         if dbg:
             dbg.crumb("waiting for PingID MFA redirect")
         log.info("Waiting for PingID MFA redirect...")
         page.wait_for_url(self.config.pingid_url, timeout=30_000)
+        self._pw(f"wait_for_url {self.config.pingid_url}")
 
         log.info("Selecting OTP method...")
         page.get_by_text(self.config.pingid_otp_text, exact=False).first.click()
+        self._pw(f"click '{self.config.pingid_otp_text}' OTP method")
 
         log.info("Clicking Sign On to proceed to OTP page...")
         page.locator("#device-submit").click()
+        self._pw("click #device-submit")
 
         if dbg:
             dbg.crumb("waiting for OTP input")
@@ -264,13 +276,16 @@ class CitrixProvider:
             "input[type='text']:visible, input[type='tel']:visible, input[type='password']:visible",
             timeout=15_000,
         )
+        self._pw("wait_for_selector OTP input")
 
         otp = self._get_otp()
         if dbg:
             dbg.crumb("injecting OTP")
         log.info("OTP captured (%d chars) — injecting into page...", len(otp))
         otp_field.type(otp)
+        self._pw("type OTP [redacted]")
         otp_field.press("Enter")
+        self._pw("press Enter")
 
         # Check for OTP rejection before waiting for redirect.
         # PingID shows <div class="error-message show">Invalid passcode</div> on failure.
@@ -285,6 +300,7 @@ class CitrixProvider:
         log.info("Waiting for StoreFront redirect after auth...")
         storefront_host = self.config.storefront_url.split("//", 1)[1].split("/")[0]
         page.wait_for_url(f"**{storefront_host}**", timeout=60_000)
+        self._pw(f"wait_for_url **{storefront_host}**")
 
         page.on("dialog", lambda d: d.dismiss())
         time.sleep(1)
@@ -296,6 +312,7 @@ class CitrixProvider:
 
         try:
             page.get_by_text("Skip Check", exact=False).first.click(timeout=10_000)
+            self._pw("click 'Skip Check'")
             log.info("Skipped endpoint analysis check.")
         except PlaywrightTimeoutError:
             log.info("No endpoint analysis check appeared — continuing.")
@@ -364,10 +381,13 @@ class CitrixProvider:
             # Open the action panel for the desktop.
             log.info("Opening action panel for '%s'...", self.config.desktop_name)
             page.get_by_text(self.config.desktop_name, exact=False).first.click()
+            self._pw(f"click '{self.config.desktop_name}'")
             try:
                 page.wait_for_selector(".appDetails-actions-header", timeout=5_000)
+                self._pw("wait_for_selector .appDetails-actions-header")
             except PlaywrightTimeoutError:
                 log.warning("Action panel did not appear — reloading...")
+                self._pw("reload page (action panel timeout)")
                 page.reload(wait_until="networkidle")
                 if self._pending_downloads:
                     log.info("Auto-download detected after reload.")
@@ -386,6 +406,7 @@ class CitrixProvider:
                     if not open_btn.evaluate("el => el.classList.contains('hidden')"):
                         log.info("Open button available — clicking...")
                         open_btn.click()
+                        self._pw("click Open button")
                     else:
                         log.info(
                             "Open button greyed out — GetLaunchStatus polling in flight, "
@@ -465,8 +486,11 @@ class CitrixProvider:
             dbg.crumb(f"restarting desktop '{self.config.desktop_name}'")
         log.info("Clicking '%s' → Restart...", self.config.desktop_name)
         page.get_by_text(self.config.desktop_name, exact=False).first.click()
+        self._pw(f"click '{self.config.desktop_name}'")
         page.wait_for_selector(".appDetails-actions-header", timeout=5_000)
+        self._pw("wait_for_selector .appDetails-actions-header")
         page.locator(".appDetails-action-restart").click()
+        self._pw("click .appDetails-action-restart")
 
         log.info("Confirming restart dialog...")
         try:
@@ -475,6 +499,7 @@ class CitrixProvider:
                 timeout=remaining_ms,
             ):
                 page.get_by_role("button", name="Restart").click()
+                self._pw("click Restart confirmation")
         except PlaywrightTimeoutError:
             raise RuntimeError(
                 "Timed out waiting for PowerOff to complete — "

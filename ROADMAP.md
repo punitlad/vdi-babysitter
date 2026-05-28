@@ -45,10 +45,10 @@
 | `capture_screenshots: true` flag | Debug Mode | Complete | Browser screenshot at failure point; privacy surface — off by default |
 | `capture_html: true` flag | Debug Mode | Complete | Browser DOM at failure point; privacy surface — off by default |
 | Failure nudge message | Debug Mode | Complete | On failure without debug mode, tip user toward `VDI_BABYSITTER_DEBUG`; only on failures debug mode can help with |
-| Local variable capture at failure frames | Debug Mode | | Sentry-style: variable state at each frame of the traceback |
-| Low-level Playwright commands in failure block | Debug Mode | | Adds Playwright-level actions to the compiled failure block |
-| Post-failure re-run prompt | Debug Mode | | After failure, prompt user to re-run with debug enabled |
-| Run manifest artifact | Debug Mode | | Dedicated structured artifact combining run statistics + orchestration flow |
+| Local variable capture at failure frames | Debug Mode | Complete | `capture_locals: true` in debug.yaml; uses TracebackException with locals |
+| Low-level Playwright commands in failure block | Debug Mode | Complete | `record_action()` called at key Playwright ops; appended to failure_block on failure |
+| Post-failure re-run prompt | Debug Mode | Complete | Prints trace view command + hints for disabled capture options on failure |
+| Run manifest artifact | Debug Mode | Complete | `manifest.json` combining run stats + orchestration flow as structured JSON |
 | `vdi-babysitter use <profile>` | CLI | | Persist active profile across invocations |
 | `citrix status` health report | CLI | | Last-connect time and reconnect count |
 | `citrix connect --keep-alive` | CLI | | Watch mode after connect |
