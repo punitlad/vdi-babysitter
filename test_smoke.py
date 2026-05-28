@@ -7,13 +7,19 @@ import os
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
-BIN = os.environ.get("VDI_BABYSITTER_CMD", "vdi-babysitter")
+_ROOT = Path(__file__).parent
+_VENV_BIN = _ROOT / ".venv" / "bin" / "vdi-babysitter"
+BIN = os.environ.get(
+    "VDI_BABYSITTER_CMD",
+    str(_VENV_BIN) if _VENV_BIN.exists() else "vdi-babysitter",
+)
 
 pytestmark = pytest.mark.skipif(
-    shutil.which(BIN) is None,
+    not Path(BIN).exists() and shutil.which(BIN) is None,
     reason=f"vdi-babysitter binary not found: {BIN}",
 )
 
