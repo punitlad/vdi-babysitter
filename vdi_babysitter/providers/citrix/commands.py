@@ -11,6 +11,7 @@ from typing import Optional
 import typer
 
 from vdi_babysitter.config import get_active_profile, load_profile, resolve
+from vdi_babysitter.debug import load_debug_config
 from vdi_babysitter.providers.citrix.provider import CitrixConfig, CitrixProvider
 
 log = logging.getLogger(__name__)
@@ -98,13 +99,20 @@ def connect(
         print(f"Error: Missing required options: {', '.join(missing)}", file=sys.stderr)
         raise typer.Exit(1)
 
-    provider = CitrixProvider(config)
+    debug_config = load_debug_config()
+    provider = CitrixProvider(config, debug_config=debug_config)
     try:
         provider.connect()
     except Exception as e:
         if resolved_log_level == "debug":
             raise
         print(f"Error: {e}", file=sys.stderr)
+        if debug_config is None:
+            print(
+                "Tip: Re-run with VDI_BABYSITTER_DEBUG=1 to capture a debug bundle.\n"
+                "     See the 'Debug mode' section in README for setup instructions.",
+                file=sys.stderr,
+            )
         raise typer.Exit(1)
 
     if output == "json":

@@ -34,17 +34,17 @@
 
 | Feature | Theme | Status | Detail |
 |---|---|---|---|
-| `VDI_BABYSITTER_DEBUG=1` env var activation | Debug Mode | | Hidden from main CLI help; hard fail if set without `debug.yaml`. See [brainstorming](./_bmad-output/brainstorming/brainstorming-session-2026-05-15-1000.md) |
-| `debug.yaml` flat config | Debug Mode | | `playwright_trace`, `playwright_slow_mo`, `capture_screenshots`, `capture_html`, `keep_runs`. See [brainstorming](./_bmad-output/brainstorming/brainstorming-session-2026-05-15-1000.md) |
-| TL;DR verdict line | Debug Mode | | First line of debug output: `FAILED at step X after Y retries in Z seconds` |
-| Run statistics artifact | Debug Mode | | Timestamp, duration, retry count, inputs (pingid, url), vdi-babysitter version, Python version, OS |
-| Orchestration flow artifact | Debug Mode | | Chronological breadcrumb trail of every significant action leading to failure |
-| Compiled failure block artifact | Debug Mode | | Step name + Playwright action + exception + page URL in one block |
-| Playwright `--trace` output | Debug Mode | | Enabled by default when debug mode is active (`playwright_trace: true`) |
-| `keep_runs` retention policy | Debug Mode | | Auto-purge old debug output directories; user-configurable in `debug.yaml` |
-| `capture_screenshots: true` flag | Debug Mode | | Browser screenshot at failure point; privacy surface — off by default |
-| `capture_html: true` flag | Debug Mode | | Browser DOM at failure point; privacy surface — off by default |
-| Failure nudge message | Debug Mode | | On failure without debug mode, tip user toward `VDI_BABYSITTER_DEBUG`; only on failures debug mode can help with |
+| `VDI_BABYSITTER_DEBUG=1` env var activation | Debug Mode | Complete | Hidden from main CLI help; hard fail if set without `debug.yaml`. See [brainstorming](./_bmad-output/brainstorming/brainstorming-session-2026-05-15-1000.md) |
+| `debug.yaml` flat config | Debug Mode | Complete | `playwright_trace`, `playwright_slow_mo`, `capture_screenshots`, `capture_html`, `keep_runs`. See [brainstorming](./_bmad-output/brainstorming/brainstorming-session-2026-05-15-1000.md) |
+| TL;DR verdict line | Debug Mode | Complete | First line of debug output: `FAILED at step X after Y retries in Z seconds` |
+| Run statistics artifact | Debug Mode | Complete | Timestamp, duration, retry count, vdi-babysitter version, Python version, OS |
+| Orchestration flow artifact | Debug Mode | Complete | Chronological breadcrumb trail of every significant action leading to failure |
+| Compiled failure block artifact | Debug Mode | Complete | Step name + exception + page URL in one block |
+| Playwright `--trace` output | Debug Mode | Complete | Enabled by default when debug mode is active (`playwright_trace: true`) |
+| `keep_runs` retention policy | Debug Mode | Complete | Auto-purge old debug output directories; user-configurable in `debug.yaml` |
+| `capture_screenshots: true` flag | Debug Mode | Complete | Browser screenshot at failure point; privacy surface — off by default |
+| `capture_html: true` flag | Debug Mode | Complete | Browser DOM at failure point; privacy surface — off by default |
+| Failure nudge message | Debug Mode | Complete | On failure without debug mode, tip user toward `VDI_BABYSITTER_DEBUG`; only on failures debug mode can help with |
 | Local variable capture at failure frames | Debug Mode | | Sentry-style: variable state at each frame of the traceback |
 | Low-level Playwright commands in failure block | Debug Mode | | Adds Playwright-level actions to the compiled failure block |
 | Post-failure re-run prompt | Debug Mode | | After failure, prompt user to re-run with debug enabled |

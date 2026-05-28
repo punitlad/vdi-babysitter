@@ -4,11 +4,14 @@ import logging
 import os
 import subprocess
 import time
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+
+from vdi_babysitter.debug import DebugConfig, DebugSession, create_debug_session, prune_old_runs
 
 log = logging.getLogger(__name__)
 
@@ -33,15 +36,19 @@ class CitrixConfig:
 
 
 class CitrixProvider:
-    def __init__(self, config: CitrixConfig) -> None:
+    def __init__(self, config: CitrixConfig, debug_config: Optional[DebugConfig] = None) -> None:
         self.config = config
         self._ica_file = config.output_dir / "session.ica"
         self._pending_downloads: list = []
+        self._debug: Optional[DebugSession] = (
+            create_debug_session(debug_config) if debug_config else None
+        )
 
     def connect(self) -> None:
         """Full connect flow: auth → download ICA → launch Workspace → verify TCP."""
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         deadline = time.time() + self.config.timeout if self.config.timeout else None
+        dbg = self._debug
 
         if browser_path := os.environ.get("VDIBABYSITTER_PLAYWRIGHT_BROWSER_PATH"):
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browser_path
@@ -50,16 +57,26 @@ class CitrixProvider:
             browser = p.chromium.launch(
                 headless=self.config.headless,
                 args=["--disable-external-protocol-dialog"],
+                slow_mo=dbg.config.playwright_slow_mo if dbg else 0,
             )
             context = browser.new_context(accept_downloads=True)
+
+            if dbg and dbg.config.playwright_trace:
+                context.tracing.start(screenshots=True, snapshots=True, sources=True)
+
             page = context.new_page()
             page.on("download", lambda d: self._pending_downloads.append(d))
             page.on("response", self._log_launch_status)
 
+            _outcome = "failed"
+            _exc: Optional[Exception] = None
+            _exc_tb: Optional[str] = None
             try:
                 self._authenticate(page)
 
                 if self.config.restart_first:
+                    if dbg:
+                        dbg.crumb("restart_first — restarting desktop before first attempt")
                     log.info("restart_first — restarting desktop before first attempt...")
                     self._restart_desktop(page, deadline=deadline)
 
@@ -76,6 +93,11 @@ class CitrixProvider:
                             f"Max retries ({self.config.max_retries}) reached without a successful connection"
                         )
 
+                    attempt_label = f"attempt {attempt}" + (
+                        f" of {self.config.max_retries}" if self.config.max_retries else ""
+                    )
+                    if dbg:
+                        dbg.crumb(attempt_label)
                     log.info(
                         "=== Attempt %d%s ===",
                         attempt,
@@ -86,24 +108,78 @@ class CitrixProvider:
 
                     if not self._download_ica(page, deadline=deadline):
                         log.warning("Could not download ICA — restarting desktop and retrying...")
+                        if dbg:
+                            dbg.crumb("ICA download failed — restarting desktop")
+                            dbg.retry()
                         self._restart_desktop(page, deadline=deadline)
                         continue
 
                     if self.config.download_only:
                         log.info("download_only — ICA saved, skipping Workspace launch.")
+                        if dbg:
+                            dbg.crumb("download_only — ICA saved, skipping Workspace launch")
+                        _outcome = "success"
                         return
 
+                    if dbg:
+                        dbg.crumb("opening ICA with Citrix Workspace")
                     log.info("Opening ICA with Citrix Workspace...")
                     subprocess.run(["open", str(self._ica_file)], check=True)
 
+                    if dbg:
+                        dbg.crumb("verifying TCP connection")
                     if self._session_connected(timeout=45):
                         log.info("Citrix session established successfully.")
+                        if dbg:
+                            dbg.crumb("session established")
+                        _outcome = "success"
                         return
 
                     log.warning("Session failed to connect — restarting desktop...")
+                    if dbg:
+                        dbg.crumb("TCP verification failed — restarting desktop")
+                        dbg.retry()
                     self._restart_desktop(page, deadline=deadline)
 
+            except Exception as exc:
+                _exc = exc
+                _exc_tb = traceback.format_exc()
+                raise
+
             finally:
+                if dbg:
+                    page_url: Optional[str] = None
+                    try:
+                        page_url = page.url
+                    except Exception:
+                        pass
+
+                    if _exc is not None and dbg.config.capture_screenshots:
+                        try:
+                            page.screenshot(path=str(dbg.run_dir / "screenshot.png"))
+                        except Exception:
+                            pass
+
+                    if _exc is not None and dbg.config.capture_html:
+                        try:
+                            (dbg.run_dir / "page.html").write_text(page.content())
+                        except Exception:
+                            pass
+
+                    if dbg.config.playwright_trace:
+                        try:
+                            context.tracing.stop(path=str(dbg.run_dir / "trace.zip"))
+                        except Exception:
+                            pass
+
+                    dbg.write(
+                        outcome=_outcome,
+                        exc=_exc,
+                        page_url=page_url if _exc else None,
+                        exc_tb=_exc_tb,
+                    )
+                    prune_old_runs(dbg.run_dir.parent, dbg.config.keep_runs)
+
                 browser.close()
 
     def _get_otp(self) -> str:
@@ -145,6 +221,9 @@ class CitrixProvider:
         return otp
 
     def _authenticate(self, page) -> None:
+        dbg = self._debug
+        if dbg:
+            dbg.crumb("navigating to StoreFront")
         log.info("Navigating to StoreFront...")
         page.goto(self.config.storefront_url, wait_until="domcontentloaded")
 
@@ -161,10 +240,14 @@ class CitrixProvider:
                 page.locator(sel).first.fill(self.config.username)
                 break
 
+        if dbg:
+            dbg.crumb("submitting credentials")
         page.locator("input[type='password']").fill(self.config.password)
         log.info("Clicking Sign On...")
         page.locator("#signOnButton").click()
 
+        if dbg:
+            dbg.crumb("waiting for PingID MFA redirect")
         log.info("Waiting for PingID MFA redirect...")
         page.wait_for_url(self.config.pingid_url, timeout=30_000)
 
@@ -174,6 +257,8 @@ class CitrixProvider:
         log.info("Clicking Sign On to proceed to OTP page...")
         page.locator("#device-submit").click()
 
+        if dbg:
+            dbg.crumb("waiting for OTP input")
         log.info("Waiting for OTP input field...")
         otp_field = page.wait_for_selector(
             "input[type='text']:visible, input[type='tel']:visible, input[type='password']:visible",
@@ -181,6 +266,8 @@ class CitrixProvider:
         )
 
         otp = self._get_otp()
+        if dbg:
+            dbg.crumb("injecting OTP")
         log.info("OTP captured (%d chars) — injecting into page...", len(otp))
         otp_field.type(otp)
         otp_field.press("Enter")
@@ -193,6 +280,8 @@ class CitrixProvider:
             msg = error_el.first.inner_text().strip()
             raise RuntimeError(f"YubiKey OTP rejected by PingID: {msg!r}")
 
+        if dbg:
+            dbg.crumb("waiting for StoreFront redirect")
         log.info("Waiting for StoreFront redirect after auth...")
         storefront_host = self.config.storefront_url.split("//", 1)[1].split("/")[0]
         page.wait_for_url(f"**{storefront_host}**", timeout=60_000)
@@ -212,6 +301,8 @@ class CitrixProvider:
             log.info("No endpoint analysis check appeared — continuing.")
 
         page.wait_for_load_state("networkidle")
+        if dbg:
+            dbg.crumb("authentication complete")
         log.info("Authentication complete.")
 
     def _log_launch_status(self, response) -> None:
@@ -368,7 +459,10 @@ class CitrixProvider:
 
     def _restart_desktop(self, page, deadline=None) -> None:
         remaining_ms = int((deadline - time.time()) * 1000) if deadline else 300_000
+        dbg = self._debug
 
+        if dbg:
+            dbg.crumb(f"restarting desktop '{self.config.desktop_name}'")
         log.info("Clicking '%s' → Restart...", self.config.desktop_name)
         page.get_by_text(self.config.desktop_name, exact=False).first.click()
         page.wait_for_selector(".appDetails-actions-header", timeout=5_000)
@@ -387,6 +481,8 @@ class CitrixProvider:
                 "PowerOff failure handling not yet implemented."
             )
 
+        if dbg:
+            dbg.crumb("PowerOff confirmed")
         log.info("PowerOff confirmed — GetLaunchStatus polling will resume automatically.")
 
     def _session_connected(self, timeout: int = 45) -> bool:
