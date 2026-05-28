@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
 from vdi_babysitter.providers.citrix.provider import CitrixConfig, CitrixProvider
+from vdi_babysitter.debug import DebugConfig, create_debug_session
 
 
 # ── CitrixConfig defaults ──────────────────────────────────────────────────────
@@ -572,3 +573,288 @@ def test_connect_timeout_raises(tmp_path):
         mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
         with pytest.raises(RuntimeError, match="timed out"):
             provider.connect()
+
+
+def test_connect_sets_playwright_browser_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("VDIBABYSITTER_PLAYWRIGHT_BROWSER_PATH", "/custom/browsers")
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    provider = make_provider(output_dir=tmp_path, download_only=True, otp="otp123")
+
+    mock_page = MagicMock()
+    mock_context = MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_browser = MagicMock()
+    mock_browser.new_context.return_value = mock_context
+
+    import os
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate"), \
+         patch.object(provider, "_download_ica", return_value=True):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        provider.connect()
+
+    assert os.environ.get("PLAYWRIGHT_BROWSERS_PATH") == "/custom/browsers"
+
+
+# ── _get_otp native dialog ─────────────────────────────────────────────────────
+
+def test_get_otp_native_dialog_calls_osascript():
+    provider = make_provider()  # no otp, no otp_cmd
+    with patch("vdi_babysitter.providers.citrix.provider.subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "myotp\n"
+        mock_run.return_value.returncode = 0
+        result = provider._get_otp()
+    assert result == "myotp"
+    cmd = mock_run.call_args[0][0]
+    assert "osascript" in cmd
+
+
+def test_get_otp_native_dialog_empty_raises():
+    provider = make_provider()
+    with patch("vdi_babysitter.providers.citrix.provider.subprocess.run") as mock_run:
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.returncode = 0
+        with pytest.raises(RuntimeError, match="OTP not received"):
+            provider._get_otp()
+
+
+# ── connect with debug session ─────────────────────────────────────────────────
+
+def _inject_debug(provider, tmp_path, **config_kwargs):
+    config = DebugConfig(**config_kwargs)
+    session = create_debug_session(config, base_dir=tmp_path / "debug")
+    provider._debug = session
+    return session
+
+
+def _make_connect_mocks():
+    mock_page = MagicMock()
+    mock_context = MagicMock()
+    mock_context.new_page.return_value = mock_page
+    mock_browser = MagicMock()
+    mock_browser.new_context.return_value = mock_context
+    return mock_page, mock_context, mock_browser
+
+
+def test_connect_with_debug_success_writes_artifacts(tmp_path):
+    provider = make_provider(output_dir=tmp_path, download_only=True, otp="otp123")
+    session = _inject_debug(provider, tmp_path, playwright_trace=False)
+    _, _, mock_browser = _make_connect_mocks()
+    mock_browser.new_context.return_value.new_page.return_value = MagicMock()
+
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate"), \
+         patch.object(provider, "_download_ica", return_value=True), \
+         patch("vdi_babysitter.providers.citrix.provider.prune_old_runs"):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        provider.connect()
+
+    assert (session.run_dir / "run_statistics.txt").exists()
+    assert (session.run_dir / "orchestration_flow.txt").exists()
+    assert not (session.run_dir / "failure_block.txt").exists()
+    stats = (session.run_dir / "run_statistics.txt").read_text()
+    assert "outcome:        success" in stats
+
+
+def test_connect_with_debug_failure_writes_failure_block(tmp_path):
+    provider = make_provider(output_dir=tmp_path, otp="otp123")
+    session = _inject_debug(provider, tmp_path, playwright_trace=False)
+    _, _, mock_browser = _make_connect_mocks()
+    mock_browser.new_context.return_value.new_page.return_value = MagicMock()
+
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate", side_effect=RuntimeError("auth failed")), \
+         patch("vdi_babysitter.providers.citrix.provider.prune_old_runs"):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        with pytest.raises(RuntimeError, match="auth failed"):
+            provider.connect()
+
+    assert (session.run_dir / "failure_block.txt").exists()
+    block = (session.run_dir / "failure_block.txt").read_text()
+    assert "auth failed" in block
+
+
+def test_connect_with_debug_playwright_trace_start_stop(tmp_path):
+    provider = make_provider(output_dir=tmp_path, download_only=True, otp="otp123")
+    session = _inject_debug(provider, tmp_path, playwright_trace=True)
+    mock_page, mock_context, mock_browser = _make_connect_mocks()
+
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate"), \
+         patch.object(provider, "_download_ica", return_value=True), \
+         patch("vdi_babysitter.providers.citrix.provider.prune_old_runs"):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        provider.connect()
+
+    mock_context.tracing.start.assert_called_once()
+    mock_context.tracing.stop.assert_called_once()
+    stop_path = mock_context.tracing.stop.call_args[1]["path"]
+    assert stop_path.endswith("trace.zip")
+
+
+def test_connect_with_debug_capture_screenshot_on_failure(tmp_path):
+    provider = make_provider(output_dir=tmp_path, otp="otp123")
+    session = _inject_debug(provider, tmp_path, playwright_trace=False, capture_screenshots=True)
+    mock_page, mock_context, mock_browser = _make_connect_mocks()
+
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate", side_effect=RuntimeError("fail")), \
+         patch("vdi_babysitter.providers.citrix.provider.prune_old_runs"):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        with pytest.raises(RuntimeError):
+            provider.connect()
+
+    mock_page.screenshot.assert_called_once()
+    assert "screenshot.png" in mock_page.screenshot.call_args[1]["path"]
+
+
+def test_connect_with_debug_capture_html_on_failure(tmp_path):
+    provider = make_provider(output_dir=tmp_path, otp="otp123")
+    session = _inject_debug(provider, tmp_path, playwright_trace=False, capture_html=True)
+    mock_page, mock_context, mock_browser = _make_connect_mocks()
+    mock_page.content.return_value = "<html></html>"
+
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate", side_effect=RuntimeError("fail")), \
+         patch("vdi_babysitter.providers.citrix.provider.prune_old_runs"):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        with pytest.raises(RuntimeError):
+            provider.connect()
+
+    mock_page.content.assert_called_once()
+    assert (session.run_dir / "page.html").exists()
+
+
+def test_connect_with_debug_restart_first_adds_crumb(tmp_path):
+    provider = make_provider(output_dir=tmp_path, restart_first=True, download_only=True, otp="otp123")
+    session = _inject_debug(provider, tmp_path, playwright_trace=False)
+    _, _, mock_browser = _make_connect_mocks()
+
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate"), \
+         patch.object(provider, "_restart_desktop"), \
+         patch.object(provider, "_download_ica", return_value=True), \
+         patch("vdi_babysitter.providers.citrix.provider.prune_old_runs"):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        provider.connect()
+
+    crumb_steps = [c for c in session._crumbs if "restart_first" in c]
+    assert crumb_steps
+
+
+def test_connect_with_debug_download_failure_increments_retry(tmp_path):
+    provider = make_provider(output_dir=tmp_path, max_retries=1, otp="otp123")
+    session = _inject_debug(provider, tmp_path, playwright_trace=False)
+    _, _, mock_browser = _make_connect_mocks()
+
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate"), \
+         patch.object(provider, "_download_ica", return_value=False), \
+         patch.object(provider, "_restart_desktop"), \
+         patch("vdi_babysitter.providers.citrix.provider.prune_old_runs"):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        with pytest.raises(RuntimeError, match="Max retries"):
+            provider.connect()
+
+    assert session._retries >= 1
+    crumbs = " ".join(session._crumbs)
+    assert "ICA download failed" in crumbs
+
+
+def test_connect_with_debug_session_tcp_success(tmp_path):
+    provider = make_provider(output_dir=tmp_path, otp="otp123")
+    session = _inject_debug(provider, tmp_path, playwright_trace=False)
+    _, _, mock_browser = _make_connect_mocks()
+
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate"), \
+         patch.object(provider, "_download_ica", return_value=True), \
+         patch.object(provider, "_session_connected", return_value=True), \
+         patch("vdi_babysitter.providers.citrix.provider.subprocess.run"), \
+         patch("vdi_babysitter.providers.citrix.provider.prune_old_runs"):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        provider.connect()
+
+    crumbs = " ".join(session._crumbs)
+    assert "session established" in crumbs
+    assert "opening ICA" in crumbs
+    assert "verifying TCP" in crumbs
+
+
+def test_connect_with_debug_tcp_fail_then_restart(tmp_path):
+    """TCP verification fails once → restart → max retries triggers."""
+    provider = make_provider(output_dir=tmp_path, max_retries=1, otp="otp123")
+    session = _inject_debug(provider, tmp_path, playwright_trace=False)
+    _, _, mock_browser = _make_connect_mocks()
+
+    with patch("vdi_babysitter.providers.citrix.provider.sync_playwright") as mock_pw, \
+         patch.object(provider, "_authenticate"), \
+         patch.object(provider, "_download_ica", return_value=True), \
+         patch.object(provider, "_session_connected", return_value=False), \
+         patch.object(provider, "_restart_desktop"), \
+         patch("vdi_babysitter.providers.citrix.provider.subprocess.run"), \
+         patch("vdi_babysitter.providers.citrix.provider.prune_old_runs"):
+        mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+        with pytest.raises(RuntimeError, match="Max retries"):
+            provider.connect()
+
+    crumbs = " ".join(session._crumbs)
+    assert "TCP verification failed" in crumbs
+    assert session._retries >= 1
+
+
+# ── _authenticate with debug ────────────────────────────────────────────────────
+
+def test_authenticate_with_debug_adds_crumbs(tmp_path):
+    provider = make_provider(otp="validotp")
+    session = _inject_debug(provider, tmp_path, playwright_trace=False)
+
+    page = MagicMock()
+    otp_field = MagicMock()
+    page.wait_for_selector.return_value = otp_field
+
+    error_el = MagicMock()
+    error_el.count.return_value = 0
+
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    def locator_side_effect(selector):
+        if "error-message" in selector:
+            return error_el
+        m = MagicMock()
+        m.count.return_value = 0
+        return m
+
+    page.locator.side_effect = locator_side_effect
+    page.get_by_text.return_value.first.click.side_effect = [
+        None,
+        PlaywrightTimeoutError("no skip"),
+    ]
+
+    with patch("vdi_babysitter.providers.citrix.provider.subprocess.run"), \
+         patch("vdi_babysitter.providers.citrix.provider.time.sleep"):
+        provider._authenticate(page)
+
+    crumbs = " ".join(session._crumbs)
+    assert "navigating to StoreFront" in crumbs
+    assert "submitting credentials" in crumbs
+    assert "authentication complete" in crumbs
+
+
+# ── _restart_desktop with debug ────────────────────────────────────────────────
+
+def test_restart_desktop_with_debug_adds_crumbs(tmp_path):
+    provider = make_provider()
+    session = _inject_debug(provider, tmp_path, playwright_trace=False)
+
+    page = MagicMock()
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=MagicMock())
+    cm.__exit__ = MagicMock(return_value=False)
+    page.expect_response.return_value = cm
+
+    provider._restart_desktop(page)
+
+    crumbs = " ".join(session._crumbs)
+    assert "restarting desktop" in crumbs
+    assert "PowerOff confirmed" in crumbs

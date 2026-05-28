@@ -189,3 +189,49 @@ def test_status_json_not_connected():
         mock_run.return_value.stdout = ""
         result = runner.invoke(app, ["citrix", "status", "--output", "json"])
     assert '"connected": false' in result.output
+
+def test_disconnect_invalid_output_flag():
+    result = runner.invoke(app, ["citrix", "disconnect", "--output", "table"])
+    assert result.exit_code == 1
+    assert "--output" in result.output
+
+def test_status_invalid_output_flag():
+    result = runner.invoke(app, ["citrix", "status", "--output", "table"])
+    assert result.exit_code == 1
+    assert "--output" in result.output
+
+def test_status_watch_exits_when_connection_lost():
+    with patch("vdi_babysitter.providers.citrix.commands.subprocess.run") as mock_run, \
+         patch("vdi_babysitter.providers.citrix.commands.time.sleep"):
+        mock_run.return_value.stdout = ""  # not connected from the start
+        result = runner.invoke(app, ["citrix", "status", "--watch"])
+    assert result.exit_code == 1
+    assert "Connection lost" in result.output
+
+def test_status_watch_loops_then_loses_connection():
+    call_count = 0
+
+    def fake_run(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        m = MagicMock()
+        m.stdout = "Citrix ESTABLISHED" if call_count == 1 else ""
+        return m
+
+    with patch("vdi_babysitter.providers.citrix.commands.subprocess.run", side_effect=fake_run), \
+         patch("vdi_babysitter.providers.citrix.commands.time.sleep"):
+        result = runner.invoke(app, ["citrix", "status", "--watch"])
+
+    assert result.exit_code == 1
+    assert "Connection lost" in result.output
+    assert call_count == 2
+
+def test_connect_failure_shows_debug_nudge():
+    with patch("vdi_babysitter.providers.citrix.commands.get_active_profile", return_value="default"), \
+         patch("vdi_babysitter.providers.citrix.commands.load_profile", return_value={}), \
+         patch("vdi_babysitter.providers.citrix.commands.CitrixProvider") as MockProvider, \
+         patch("vdi_babysitter.providers.citrix.commands.load_debug_config", return_value=None):
+        MockProvider.return_value.connect.side_effect = RuntimeError("connection failed")
+        result = runner.invoke(app, ["citrix", "connect"] + BASE_FLAGS)
+    assert result.exit_code == 1
+    assert "VDI_BABYSITTER_DEBUG" in result.output
